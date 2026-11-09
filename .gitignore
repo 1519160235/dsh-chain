@@ -6,3 +6,4 @@ node_modules/
 tools/eval-queries.json
 .orig/
 *.bak*
+package-lock.json
