@@ -1,0 +1,4 @@
+# 仅测试需要。插件运行时不需要额外依赖：
+#   - 分词用 jieba，MaiBot 的 requirements.txt 已包含
+#   - 存储用标准库 sqlite3
+pytest>=8.0

@@ -1,0 +1,36 @@
+{
+  "manifest_version": 2,
+  "version": "0.1.0",
+  "name": "思维链记忆 (chain_maibot)",
+  "description": "记住「为什么这么决定」而不只是结论。八池分级遗忘、每轮注入系统提示、字符预算装箱、夜巡自动整理。移植自 dsh-chain。",
+  "author": {
+    "name": "cangqiong666 / 原作：末苍和她的大肥鱼",
+    "url": "https://github.com/cangqiong666"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/cangqiong666/dsh-chain",
+    "homepage": "https://github.com/canglight/dsh-chain",
+    "issues": "https://github.com/cangqiong666/dsh-chain/issues"
+  },
+  "changelog": "CHANGELOG.md",
+  "host_application": {
+    "min_version": "1.3.0",
+    "max_version": "1.4.99"
+  },
+  "sdk": {
+    "min_version": "2.0.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [],
+  "capabilities": [
+    "config.get"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  },
+  "id": "canglight.chain-maibot"
+}
