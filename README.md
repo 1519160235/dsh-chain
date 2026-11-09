@@ -80,7 +80,7 @@ A_Memorix 是 MaiBot 的核心模块（`src/A_memorix`），走 `host_service` �
 
 ```bash
 cd ~/mai/plugins
-git clone https://github.com/1519160235/dsh-chain.git chain-maibot
+git clone <本仓库地址> chain-maibot
 ```
 
 依赖：**无需额外安装**。分词用 `jieba`，MaiBot 的 `requirements.txt` 已包含；

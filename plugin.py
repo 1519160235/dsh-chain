@@ -1,4 +1,4 @@
-"""chain_maibot —— 思维链记忆，MaiBot 版。
+"""mai_chain —— 思维链记忆，MaiBot 版。
 
 移植自 `canglight/dsh-chain <https://github.com/canglight/dsh-chain>`_（MIT）。
 原项目是给 DeepSeek Harness 用的，这里把**记忆模型与算法**搬到 MaiBot 的插件体系上。
@@ -29,7 +29,7 @@ A_Memorix 是核心模块（``src/A_memorix``），走 ``host_service`` 直连�
 且多个 handler 之间是覆盖传递（``kwargs = dict(modified_kwargs)``）。
 所以只要不碰别人的 item，就不会抹掉内置记忆的注入。
 
-@module chain_maibot
+@module mai_chain
 """
 
 from __future__ import annotations
@@ -38,26 +38,36 @@ import asyncio
 import copy
 import json
 import logging
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Sequence
 
-from maibot_sdk import Field, HookHandler, HookMode, MaiBotPlugin, PluginConfigBase, Tool
-from maibot_sdk.types import ToolParameterInfo, ToolParamType
+from maibot_sdk import Field, HookHandler, MaiBotPlugin, PluginConfigBase, Tool
+from maibot_sdk.types import HookMode, ToolParameterInfo, ToolParamType
 
-from chain_maibot.patrol import (
+# **必须做的事**：宿主插件加载器只用 spec_from_file_location 加载 plugin.py，
+# 临时加进 sys.path 的是 `plugins/`（plugin_dir.parent），**不是插件自己的目录**。
+# 所以 `import mai_chain` 会找不到 —— 必须自己把插件根目录挂上去。
+# 用 append 而不是 insert(0)：不抢占宿主已有路径的优先级。
+_PLUGIN_ROOT = str(Path(__file__).resolve().parent)
+if _PLUGIN_ROOT not in sys.path:
+    sys.path.append(_PLUGIN_ROOT)
+
+from mai_chain.patrol import (
     build_patrol_report,
     build_rebalance_plan,
     triage_fragment,
 )
-from chain_maibot.injection import (
+from mai_chain.injection import (
     INJECT_MAX_CHARS,
     build_working_block,
     human_age,
     render_injection,
     render_mermaid,
 )
-from chain_maibot.mood import merge_working, update_mood, visible_mood
-from chain_maibot.pools import (
+from mai_chain.mood import merge_working, update_mood, visible_mood
+from mai_chain.pools import (
     CORE_MAX,
     POOLS,
     base_pool_of,
@@ -66,23 +76,23 @@ from chain_maibot.pools import (
     parse_ts,
     pool_of,
 )
-from chain_maibot.retrieval import (
+from mai_chain.retrieval import (
     init_retrieval,
     rank_entries_rrf,
     retrieval_error,
     retrieval_ready,
 )
-from chain_maibot.store import (
+from mai_chain.store import (
     EVENT_RECALL,
     EVENT_REBALANCE,
     EVENT_RETAG,
     EVENT_SUPERSEDE,
     EVENT_TOUCH,
     TOUCH_DELTA,
-    ChainStore,
+    MaiChainStore,
 )
 
-logger = logging.getLogger("chain_maibot")
+logger = logging.getLogger("mai_chain")
 
 #: 注入段在 system item 里追加时的分隔。
 INJECT_SEPARATOR = "\n\n"
@@ -97,13 +107,19 @@ class PoolConfig(PluginConfigBase):
 
 
 class PluginSection(PluginConfigBase):
-    """主开关。"""
+    """主开关。
+
+    ``config_version`` 是宿主的硬性要求：配置节缺少它时，宿主会拒绝加载插件，
+    只保留配置管理页面（"插件配置文件缺少 plugin.config_version 版本号"）。
+    升级配置结构时改这里的值，宿主会按新骨架重建并迁移旧字段。
+    """
 
     __ui_label__ = "插件"
     __ui_icon__ = "package"
     __ui_order__ = 0
 
     enabled: bool = Field(default=False, description="是否启用思维链记忆")
+    config_version: str = Field(default="1.0.0", description="配置版本（宿主用于升级时迁移字段）")
 
 
 class InjectionSection(PluginConfigBase):
@@ -143,7 +159,7 @@ class PatrolSection(PluginConfigBase):
     auto_rebalance: bool = Field(default=False, description="自动夜巡是否执行归整（默认只出报告）")
 
 
-class ChainPluginConfig(PluginConfigBase):
+class MaiChainConfig(PluginConfigBase):
     """思维链记忆插件配置。"""
 
     plugin: PluginSection = Field(default_factory=PluginSection)
@@ -153,14 +169,14 @@ class ChainPluginConfig(PluginConfigBase):
     pools: Dict[str, PoolConfig] = Field(default_factory=dict, description="按池覆盖生命周期参数")
 
 
-class ChainMemoryPlugin(MaiBotPlugin):
+class MaiChainPlugin(MaiBotPlugin):
     """思维链记忆插件。"""
 
-    config_model: ClassVar[type[ChainPluginConfig]] = ChainPluginConfig
+    config_model: ClassVar[type[MaiChainConfig]] = MaiChainConfig
 
     def __init__(self) -> None:
         super().__init__()
-        self._store: Optional[ChainStore] = None
+        self._store: Optional[MaiChainStore] = None
         self._init_lock = asyncio.Lock()
         self._retrieval_ready = False
         self._patrol_task: Optional[asyncio.Task[None]] = None
@@ -206,13 +222,13 @@ class ChainMemoryPlugin(MaiBotPlugin):
 
     # ------------------------------------------------------------------ 内部工具
 
-    def _cfg(self) -> ChainPluginConfig:
+    def _cfg(self) -> MaiChainConfig:
         """取强类型配置；未声明时抛 RuntimeError（SDK 行为）而不是静默降级。"""
 
         try:
             return self.config  # type: ignore[return-value]
         except RuntimeError:
-            return ChainPluginConfig()
+            return MaiChainConfig()
 
     def _enabled(self) -> bool:
         return bool(self._cfg().plugin.enabled)
@@ -233,7 +249,7 @@ class ChainMemoryPlugin(MaiBotPlugin):
                 overrides[key] = patch
         return overrides
 
-    async def _ensure_ready(self) -> ChainStore:
+    async def _ensure_ready(self) -> MaiChainStore:
         """惰性初始化存储与检索。幂等。"""
 
         if self._store is not None:
@@ -242,7 +258,7 @@ class ChainMemoryPlugin(MaiBotPlugin):
             if self._store is not None:
                 return self._store
             data_dir = self.ctx.paths.data_dir
-            store = ChainStore(data_dir / "chain.db")
+            store = MaiChainStore(data_dir / "chain.db")
             await asyncio.to_thread(store.initialize)
             # 检索层初始化可能读 IDF 表，放线程里避免阻塞事件循环。
             self._retrieval_ready = await asyncio.to_thread(init_retrieval)
@@ -367,7 +383,7 @@ class ChainMemoryPlugin(MaiBotPlugin):
 
     async def _mark_recalls(
         self,
-        store: ChainStore,
+        store: MaiChainStore,
         entries: Sequence[Mapping[str, Any]],
         user_text: str,
         injected_block: str,
@@ -434,7 +450,7 @@ class ChainMemoryPlugin(MaiBotPlugin):
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._patrol_task = loop.create_task(self._patrol_loop(), name="chain_maibot_patrol")
+        self._patrol_task = loop.create_task(self._patrol_loop(), name="mai_chain_patrol")
 
     async def _patrol_loop(self) -> None:
         """每 10 分钟看一次「现在 >= patrolHour 且今天报告不存在」。"""
@@ -458,7 +474,7 @@ class ChainMemoryPlugin(MaiBotPlugin):
             except Exception as exc:  # noqa: BLE001
                 logger.warning("夜巡循环异常（下轮重试）: %s", exc)
 
-    async def _run_patrol(self, store: ChainStore, date_label: str, *, auto: bool) -> Dict[str, Any]:
+    async def _run_patrol(self, store: MaiChainStore, date_label: str, *, auto: bool) -> Dict[str, Any]:
         """跑一次夜巡。自动模式下**只出报告**，不改任何记录。"""
 
         entries = await asyncio.to_thread(store.load_all, include_superseded=True)
@@ -939,7 +955,7 @@ class ChainMemoryPlugin(MaiBotPlugin):
             return {"success": False, "error": str(exc)}
 
 
-def create_plugin() -> ChainMemoryPlugin:
+def create_plugin() -> MaiChainPlugin:
     """SDK 插件工厂。"""
 
-    return ChainMemoryPlugin()
+    return MaiChainPlugin()

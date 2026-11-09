@@ -18,15 +18,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from chain_maibot import pools  # noqa: E402
-from chain_maibot.injection import render_injection  # noqa: E402
-from chain_maibot.mood import (  # noqa: E402
+from mai_chain import pools  # noqa: E402
+from mai_chain.injection import render_injection  # noqa: E402
+from mai_chain.mood import (  # noqa: E402
     detect_mood,
     merge_working,
     mood_strength,
     visible_mood,
 )
-from chain_maibot.patrol import build_patrol_report, similarity  # noqa: E402
+from mai_chain.patrol import build_patrol_report, similarity  # noqa: E402
 
 
 def _iso(days_ago: float = 0, *, hours_ago: float = 0) -> str:
@@ -234,7 +234,7 @@ class TestRetrieval:
     """检索。"""
 
     def test_rrf_finds_by_keyword(self):
-        from chain_maibot.retrieval import rank_entries_rrf
+        from mai_chain.retrieval import rank_entries_rrf
 
         entries = [
             _entry(id="a", judgement="决定用 SQLite 存思维链", tags=["决策"]),
@@ -247,13 +247,13 @@ class TestRetrieval:
     def test_no_evidence_no_candidate(self):
         """没有词面证据的条目不进候选。"""
 
-        from chain_maibot.retrieval import rank_entries_rrf
+        from mai_chain.retrieval import rank_entries_rrf
 
         entries = [_entry(id="x", judgement="完全无关的内容", tags=["日常"])]
         assert rank_entries_rrf(entries, "量子力学") == []
 
     def test_time_hint(self):
-        from chain_maibot.retrieval import parse_time_hint
+        from mai_chain.retrieval import parse_time_hint
 
         hint = parse_time_hint("昨天我们改了什么")
         assert hint is not None

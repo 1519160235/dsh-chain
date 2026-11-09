@@ -55,3 +55,35 @@
 - 工作记忆只认显式说法，「可能」「也许」抓不到。
 - 情绪判定为关键词级，粗粒度。
 - **尚未在真实 MaiBot 环境验证**：核心算法有单测，注入层需实机联调。
+
+## [0.1.1] - 2026-11-09
+
+实机适配修正。在 MaiBot 1.4.2 + SDK 2.21.0（Windows / uv 安装）上真实跑通。
+
+### 修复
+
+- **`HookMode` 导入路径错误**：它不在 `maibot_sdk` 顶层，而在 `maibot_sdk.types`。
+  写错会在导入阶段直接 `ImportError`，插件根本加载不起来。
+- **`import mai_chain` 找不到模块**：宿主插件加载器只用
+  `spec_from_file_location` 加载 `plugin.py`，临时加进 `sys.path` 的是
+  `plugins/`（`plugin_dir.parent`）而**不是插件自己的目录**。
+  子包导入必然失败。已在 `plugin.py` 顶部把自身目录 append 进 `sys.path`。
+- **manifest 字段被宿主拒绝**：`_manifest.json` 的 Pydantic schema 用
+  `extra="forbid"` 严格校验，`files` / `keywords` / `changelog` 均不在白名单，
+  会导致「插件注册失败」。已裁剪为白名单内的 14 个字段。
+- **缺 `plugin.config_version`**：宿主要求配置节必须带版本号，否则只加载配置管理页面、
+  不激活功能（「当前版本策略不再兼容无版本配置」）。已在 `PluginSection` 补上。
+
+### 新增
+
+- 插件图标 `assets/icon.svg`：八池环 + 中心节点，深色圆角底，manifest 指向它。
+- 插件改名为「思维链记忆」，ID `cangqiong666.mai-chain`，Python 包 `mai_chain`
+  （去掉 dsh 前缀，避免在 MaiBot 里造成名不副实）。
+
+### 实机验证结果
+
+- 宿主加载：`已加载=7`（含 `cangqiong666.mai-chain`），`失败=0`
+- 组件注册：9 个 TOOL + 1 个 HOOK_HANDLER
+- 端到端：写入 → 检索 → 元记忆 → 统计 → 注入 Hook 全通
+- 注入实测：system item 追加 1 个 text part，253 字符，**原 items 对象未被污染**
+- 存储：数据目录已生成 `chain.db`（WAL 模式）
