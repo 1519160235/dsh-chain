@@ -1193,15 +1193,48 @@ class MaiChainPlugin(MaiBotPlugin):
             for key in POOLS
         ]
 
+        # ---- 跨池的桥：两个池的记忆共享了同一个"不常见"的词，就认为它们相关。
+        # 只统计一次、不逐对比较，所以是 O(词数) 而不是 O(n²)。
+        bridges: List[Dict[str, Any]] = []
+        try:
+            from mai_chain.retrieval import STOPWORDS, query_tokens  # noqa: PLC0415
+            from mai_chain.retrieval import searchable_text_of  # noqa: PLC0415
+
+            word_pools: Dict[str, Dict[str, int]] = {}
+            for node in nodes:
+                text = node["t"]
+                for word in query_tokens(text):
+                    if word in STOPWORDS or len(word) < 2:
+                        continue
+                    bucket = word_pools.setdefault(word, {})
+                    bucket[node["p"]] = bucket.get(node["p"], 0) + 1
+            pair_counts: Dict[tuple, int] = {}
+            for word, bucket in word_pools.items():
+                if len(bucket) < 2:
+                    continue
+                keys = sorted(bucket)
+                for i in range(len(keys)):
+                    for j in range(i + 1, len(keys)):
+                        pair = (keys[i], keys[j])
+                        pair_counts[pair] = pair_counts.get(pair, 0) + 1
+            bridges = [
+                {"a": a, "b": b, "n": n}
+                for (a, b), n in sorted(pair_counts.items(), key=lambda item: -item[1])[:12]
+            ]
+        except Exception as exc:  # noqa: BLE001 —— 桥算不出来不该拖垮整个图
+            logger.debug("跨池桥计算失败（忽略）: %s", exc)
+
         return {
             "nodes": nodes,
             "edges": edges,
+            "bridges": bridges,
             "pools": pool_rows,
             "stats": {
                 "shown": len(nodes),
                 "total": total,
                 "truncated": total > len(nodes),
                 "events": sum(1 for n in nodes if n["ev"]),
+                "bridges": len(bridges),
             },
             "error": "",
         }

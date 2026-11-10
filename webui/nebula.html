@@ -3,47 +3,47 @@
 <title>思维链星云</title>
 <style>
   :root{
-    --bg:#0d1218; --panel:rgba(18,25,33,.86); --line:#233240;
-    --text:#e6eef4; --muted:#8fa3b0; --accent:#4ec9a0;
+    --bg:#0b1117; --line:#22303c;
+    --text:#e7eff5; --muted:#8ba0ae; --accent:#4ec9a0;
   }
-  html.dark{ --bg:#0a0f14; --panel:rgba(16,22,29,.9); }
-  html:not(.dark){ --bg:#f3f6f8; --panel:rgba(255,255,255,.9); --line:#dbe3e9; --text:#1c2b36; --muted:#5f7280; }
+  html.dark{ --bg:#080d12; }
+  html:not(.dark){ --bg:#eef3f6; --line:#d3dde4; --text:#17262f; --muted:#58707e; }
   *{box-sizing:border-box}
   body{
-    margin:0; padding:14px; background:transparent; color:var(--text);
+    margin:0; padding:12px; background:transparent; color:var(--text);
     font:13px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
   }
-  .wrap{position:relative; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--bg);}
-  canvas{display:block; width:100%; height:520px; cursor:grab; touch-action:none;}
+  .wrap{position:relative; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:var(--bg);}
+  canvas{display:block; width:100%; height:min(72vh,620px); cursor:grab; touch-action:none;}
   canvas.drag{cursor:grabbing}
-  .hud{
-    position:absolute; left:12px; top:10px; display:flex; gap:6px; flex-wrap:wrap;
-    font-size:11px; color:var(--muted); pointer-events:none;
-  }
+  canvas.pick{cursor:pointer}
+  .hud{position:absolute; left:14px; top:12px; font-size:11px; color:var(--muted); pointer-events:none; line-height:1.75}
   .hud b{color:var(--text); font-weight:500}
-  .ctl{position:absolute; right:10px; top:10px; display:flex; gap:6px}
+  .ctl{position:absolute; right:12px; top:12px; display:flex; gap:6px}
   .ctl button{
-    background:var(--panel); color:var(--text); border:1px solid var(--line);
+    background:rgba(12,18,24,.72); color:var(--text); border:1px solid var(--line);
     border-radius:7px; padding:4px 9px; font-size:11px; cursor:pointer; line-height:1.4;
+    backdrop-filter:blur(4px);
   }
+  html:not(.dark) .ctl button{background:rgba(255,255,255,.85)}
   .ctl button:hover{border-color:var(--accent)}
   .ctl button[aria-pressed="true"]{border-color:var(--accent); color:var(--accent)}
-  .legend{
-    display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:10px; font-size:11px; color:var(--muted);
-  }
+  .legend{display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:9px; font-size:11px; color:var(--muted)}
   .legend span{display:inline-flex; align-items:center; gap:5px}
-  .dot{width:8px; height:8px; border-radius:50%; flex:none}
+  .dot{width:8px; height:8px; border-radius:50%; flex:none; display:inline-block}
   .card{
-    position:absolute; right:12px; bottom:12px; width:min(330px,calc(100% - 24px));
-    background:var(--panel); border:1px solid var(--line); border-radius:10px;
-    padding:10px 12px; backdrop-filter:blur(6px); display:none;
+    position:absolute; right:12px; bottom:12px; width:min(340px,calc(100% - 24px));
+    background:rgba(10,16,21,.9); border:1px solid var(--line); border-radius:11px;
+    padding:11px 13px; backdrop-filter:blur(8px); display:none;
   }
+  html:not(.dark) .card{background:rgba(255,255,255,.95)}
   .card.on{display:block}
-  .card h4{margin:0 0 6px; font-size:13px; font-weight:500; line-height:1.45}
+  .card h4{margin:0 0 6px; padding-right:16px; font-size:13px; font-weight:500; line-height:1.5}
   .card .meta{font-size:11px; color:var(--muted); margin-bottom:6px}
-  .card p{margin:4px 0 0; font-size:12px; color:var(--text); opacity:.88}
+  .card p{margin:5px 0 0; font-size:12px; opacity:.86; line-height:1.65; white-space:pre-line}
+  .card .close{position:absolute; right:9px; top:6px; cursor:pointer; color:var(--muted); font-size:16px; line-height:1}
   .empty{
-    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    position:absolute; inset:0; display:none; align-items:center; justify-content:center;
     flex-direction:column; gap:8px; color:var(--muted); font-size:13px; text-align:center; padding:24px;
   }
   .empty b{color:var(--text); font-weight:500; font-size:14px}
@@ -53,16 +53,19 @@
   <canvas id="sky"></canvas>
   <div class="hud" id="hud"></div>
   <div class="ctl">
-    <button id="spin" aria-pressed="true" title="整团自转">自转</button>
-    <button id="orbit" aria-pressed="true" title="记忆球绕池心走轨道">轨道</button>
-    <button id="reset" title="回到初始视角">复位</button>
+    <button id="spin" aria-pressed="true">自转</button>
+    <button id="orbit" aria-pressed="true">轨道</button>
+    <button id="bloom" aria-pressed="true">辉光</button>
+    <button id="reset">复位</button>
   </div>
   <div class="card" id="card">
+    <span class="close" id="cardClose">×</span>
     <h4 id="cardTitle"></h4>
     <div class="meta" id="cardMeta"></div>
     <p id="cardBody"></p>
+    <p id="cardHint" style="color:var(--muted);font-size:11px"></p>
   </div>
-  <div class="empty" id="empty" style="display:none">
+  <div class="empty" id="empty">
     <b>星云还是空的</b>
     <span>让麦麦做几个决定，或在「记忆列表」里写一条，球就会长出来。</span>
   </div>
@@ -71,6 +74,9 @@
 
 <script>
 (() => {
+  'use strict';
+
+  // ============================================================ 引用与参数
   const cv = document.getElementById('sky');
   const ctx = cv.getContext('2d');
   const hud = document.getElementById('hud');
@@ -79,274 +85,588 @@
   const emptyBox = document.getElementById('empty');
   const btnSpin = document.getElementById('spin');
   const btnOrbit = document.getElementById('orbit');
+  const btnBloom = document.getElementById('bloom');
 
-  let data = { nodes: [], edges: [], pools: [], stats: {} };
-  let dots = [];          // 渲染用节点
-  let poolCenters = {};   // 池心（3D）
-  let spinOn = true, orbitOn = true;
-  let yaw = -0.5, pitch = 0.32, zoom = 1, t = 0;
-  let dragging = false, lastX = 0, lastY = 0, moved = 0;
-  let hovered = null, selected = null;
-  let dpr = Math.min(2, window.devicePixelRatio || 1);
+  const FOV = 4.4;            // 相机到原点距离
+  const FPS_MS = 33;          // 30fps 上限（与上游一致）
+  const INTRO_MS = 1500;      // 开场铺开时长
+  const POOL_PARTICLES = 46;  // 每个池心的柔光粒子数
+  const DUST_COUNT = 130;     // 屏幕微尘
+  const LABEL_TOP = 10;       // 只给权重前 N 名挂标签
+  const EVIDENCE_DOTS = 3;    // 每条依据画几颗流动微粒
 
-  // ---- 八池在 3D 空间里的位置：正八面体 + 上下两环，避免全挤在一个平面上
+  // 八池的 3D 位置：正八面体 + 上下顶底
   const SLOTS = [
-    [  0,  1.00,  0   ],   // core       顶
-    [ .82,  .45,  .32 ],   // fact
-    [ .28,  .58, -.86 ],   // skillRule
-    [-.74,  .40,  -.52 ],   // skillExp
-    [-.62,  .10,  .78 ],   // dailyCore
-    [ .70, -.16,  .66 ],   // dailyPartial
-    [ .10, -.62, -.80 ],   // emotion
-    [  0, -1.00,  0   ],   // hippocampus 底
+    [ 0.00,  1.00,  0.00],  // core
+    [ 0.82,  0.45,  0.32],  // fact
+    [ 0.28,  0.58, -0.86],  // skillRule
+    [-0.74,  0.40, -0.52],  // skillExp
+    [-0.62,  0.10,  0.78],  // dailyCore
+    [ 0.70, -0.16,  0.66],  // dailyPartial
+    [ 0.10, -0.62, -0.80],  // emotion
+    [ 0.00, -1.00,  0.00],  // hippocampus
   ];
 
-  function layout() {
+  // ============================================================ 状态
+  let data = { nodes: [], edges: [], bridges: [], pools: [], stats: {} };
+  let orbs = [];
+  let poolMap = {};
+  let poolOrder = [];
+  let dust = [];
+  let labelTop = new Set();
+
+  let spinOn = true, orbitOn = true, bloomOn = true;
+  let yaw = -0.5, pitch = 0.30, zoom = 1;
+  let vyaw = 0, vpitch = 0;
+  let dragging = false, lastX = 0, lastY = 0, moved = 0;
+  let hovered = null, focused = null, focusT = 0;
+  let introStart = 0, introEase = 0;
+  let t = 0, last = 0;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+
+  // ============================================================ 小工具
+  const easeOut = x => 1 - Math.pow(1 - x, 3);
+  const lerp = (a, b, k) => a + (b - a) * k;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const isDark = () => document.documentElement.classList.contains('dark');
+
+  function hexA(hex, a) {
+    const h = (hex || '#8fa3b0').replace('#', '');
+    const n = h.length === 3 ? h.split('').map(c => c + c).join('') : h.padEnd(6, '0').slice(0, 6);
+    const r = parseInt(n.slice(0, 2), 16) || 140;
+    const g = parseInt(n.slice(2, 4), 16) || 163;
+    const b = parseInt(n.slice(4, 6), 16) || 176;
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+  }
+
+  function resize() {
     const rect = cv.getBoundingClientRect();
     cv.width = Math.max(1, Math.round(rect.width * dpr));
     cv.height = Math.max(1, Math.round(rect.height * dpr));
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  // ---- 取数据
+  // ============================================================ 取数
   async function load() {
     try {
       await window.maibot.ready;
       data = (await window.maibot.query('g', { limit: 220 })) || {};
     } catch (e) {
-      data = { nodes: [], edges: [], pools: [], error: String(e) };
+      data = { nodes: [], edges: [], bridges: [], pools: [], error: String(e) };
     }
     build();
+    introStart = performance.now();
   }
 
+  // ============================================================ 建场景
   function build() {
     const pools = data.pools || [];
-    poolCenters = {};
+    poolMap = {};
+    poolOrder = [];
+
     pools.forEach((p, i) => {
-      const s = SLOTS[i % SLOTS.length];
-      const radius = p.key === 'core' ? 0.42 : p.key === 'hippocampus' ? 0.5 : 0.72;
-      poolCenters[p.key] = { x: s[0] * 1.55, y: s[1] * 1.42, z: s[2] * 1.55, r: radius, meta: p };
+      const slot = SLOTS[i % SLOTS.length];
+      const spread = 1.62;
+      const cloudR = p.key === 'core' ? 0.30 : p.key === 'hippocampus' ? 0.34 : 0.46;
+      const center = { x: slot[0] * spread, y: slot[1] * 1.44, z: slot[2] * spread };
+
+      // 池"团"：一团柔光粒子，不是一个圆点
+      const cloud = [];
+      for (let k = 0; k < POOL_PARTICLES; k++) {
+        const u = (k + 0.5) / POOL_PARTICLES;
+        const phi = Math.acos(1 - 2 * u);
+        const theta = Math.PI * (1 + Math.sqrt(5)) * k;
+        const rr = cloudR * (0.25 + 0.75 * Math.cbrt((k % 7) / 7 + 0.02));
+        cloud.push({
+          x: Math.sin(phi) * Math.cos(theta) * rr,
+          y: Math.cos(phi) * rr * 0.9,
+          z: Math.sin(phi) * Math.sin(theta) * rr,
+          s: 0.7 + ((k * 37) % 11) / 10,
+          ph: (k * 0.61) % (Math.PI * 2),
+        });
+      }
+
+      poolMap[p.key] = { center, cloud, meta: p, r: cloudR };
+      if (p.count > 0) poolOrder.push(p.key);
     });
 
-    // 每个池里的球均匀分布在一个小圆盘上，各自有固定相位 —— 不互相追
-    const perPool = {};
-    dots = (data.nodes || []).map((n, i) => {
-      const center = poolCenters[n.p] || { x: 0, y: 0, z: 0, r: .7 };
-      const idx = perPool[n.p] = (perPool[n.p] || 0) + 1;
+    // 记忆球：池内按黄金角铺开，各自绕池心走固定轨道
+    const used = {};
+    orbs = (data.nodes || []).map((n, i) => {
+      const holder = poolMap[n.p];
+      const center = holder ? holder.center : { x: 0, y: 0, z: 0 };
+      const idx = used[n.p] = (used[n.p] || 0) + 1;
+      const total = Math.max(1, (pools.find(p => p.key === n.p) || {}).count || 1);
       const golden = 2.399963229728653;
-      const rr = center.r * Math.sqrt(idx / Math.max(1, (data.pools.find(p => p.key === n.p) || {}).count || 1));
       const ang = idx * golden;
+      const rr = (holder ? holder.r : 0.4) * Math.sqrt(Math.min(1, idx / total)) * 1.05;
       return {
         n,
         base: {
           x: center.x + Math.cos(ang) * rr,
-          y: center.y + Math.sin(ang * 1.7) * rr * 0.35,
+          y: center.y + Math.sin(ang * 1.7) * rr * 0.42,
           z: center.z + Math.sin(ang) * rr,
         },
-        phase: (i * 0.7) % (Math.PI * 2),
-        amp: 0.045 + (i % 5) * 0.012,
-        sx: 0, sy: 0, depth: 0,
-        color: (center.meta && center.meta.color) || '#8fa3b0',
+        phase: (i * 0.73) % (Math.PI * 2),
+        amp: 0.035 + (i % 6) * 0.011,
+        color: (holder && holder.meta.color) || '#8fa3b0',
+        sx: 0, sy: 0, depth: 0, scale: 0, near: 1,
       };
     });
 
-    // HUD 与图例
+    // 只给权重前 N 挂标签：球一密，全挂就糊了
+    labelTop = new Set(
+      orbs.slice().sort((a, b) => b.n.w - a.n.w).slice(0, LABEL_TOP).map(o => o.n.id)
+    );
+
+    // 屏幕微尘：不参与投影，纯氛围
+    dust = [];
+    for (let i = 0; i < DUST_COUNT; i++) {
+      dust.push({
+        x: ((i * 137.508) % 100) / 100,
+        y: ((i * 79.31) % 100) / 100,
+        r: 0.4 + ((i * 13) % 9) / 12,
+        a: 0.05 + ((i * 17) % 10) / 110,
+        ph: (i * 0.37) % (Math.PI * 2),
+      });
+    }
+
     const st = data.stats || {};
-    hud.innerHTML = `<span>共 <b>${st.shown || 0}</b> 颗记忆球</span>`
-      + (st.truncated ? `<span>· 还有 ${st.total - st.shown} 条太密集未画</span>` : '')
-      + (st.events ? `<span>· <b>${st.events}</b> 条属同一次决策</span>` : '');
-    legend.innerHTML = (data.pools || [])
+    let hudHtml = '<span>共 <b>' + (st.shown || 0) + '</b> 颗记忆球</span>';
+    if (st.truncated) hudHtml += '<br><span>还有 ' + (st.total - st.shown) + ' 条太密集未画</span>';
+    if (st.bridges) hudHtml += '<br><span><b>' + st.bridges + '</b> 条跨池的桥</span>';
+    if (st.events) hudHtml += '<br><span><b>' + st.events + '</b> 条属同一次决策</span>';
+    hud.innerHTML = hudHtml;
+
+    legend.innerHTML = pools
       .filter(p => p.count > 0)
-      .map(p => `<span><i class="dot" style="background:${p.color}"></i>${p.label} ${p.count}</span>`)
+      .map(p => '<span><i class="dot" style="background:' + p.color + '"></i>' + p.label + ' ' + p.count + '</span>')
       .join('');
 
-    emptyBox.style.display = (data.nodes || []).length ? 'none' : 'flex';
+    emptyBox.style.display = orbs.length ? 'none' : 'flex';
   }
 
-  // ---- 3D 投影
+  // ============================================================ 3D 投影
+  // 世界坐标 → 屏幕坐标：绕 Y 偏航、绕 X 俯仰，再透视除法。
   function project(p) {
+    const k = introEase;
+    const x = p.x * k, y = p.y * k, z = p.z * k;
+
     const cy = Math.cos(yaw), sy = Math.sin(yaw);
-    let x = p.x * cy - p.z * sy;
-    let z = p.x * sy + p.z * cy;
+    const x1 = x * cy - z * sy;
+    let z1 = x * sy + z * cy;
+
     const cp = Math.cos(pitch), sp = Math.sin(pitch);
-    let y = p.y * cp - z * sp;
-    z = p.y * sp + z * cp;
-    const dist = 4.2;
-    const f = (dist / (dist + z)) * Math.min(cv.clientWidth, cv.clientHeight) * 0.30 * zoom;
-    return { x: cv.clientWidth / 2 + x * f, y: cv.clientHeight / 2 + y * f, s: f, z };
+    const y1 = y * cp - z1 * sp;
+    z1 = y * sp + z1 * cp;
+
+    const f = (FOV / (FOV + z1)) * Math.min(cv.clientWidth, cv.clientHeight) * 0.34 * zoom;
+    return {
+      x: cv.clientWidth / 2 + x1 * f,
+      y: cv.clientHeight / 2 + y1 * f,
+      s: f,
+      z: z1,
+      near: clamp(FOV / (FOV + z1), 0.12, 1.7),
+    };
   }
 
-  // ---- 主循环（30fps 上限，与上游一致）
-  let last = 0;
+  // ============================================================ 主循环
   function frame(now) {
     requestAnimationFrame(frame);
-    if (now - last < 33) return;
-    const dt = Math.min(0.05, (now - last) / 1000) || 0.016;
+    if (now - last < FPS_MS) return;
+    const dt = Math.min(0.06, (now - last) / 1000) || 0.033;
     last = now;
     t += dt;
-    if (spinOn) yaw += dt * 0.10;
+
+    introEase = easeOut(clamp((now - introStart) / INTRO_MS, 0, 1));
+
+    // 自转与拖拽惯性
+    if (!dragging) {
+      if (Math.abs(vyaw) > 0.0006 || Math.abs(vpitch) > 0.0006) {
+        yaw += vyaw * dt;
+        pitch = clamp(pitch + vpitch * dt, -1.25, 1.25);
+        vyaw *= 0.94; vpitch *= 0.94;
+      } else if (spinOn) {
+        yaw += dt * 0.085;
+      }
+    }
+    focusT = lerp(focusT, focused ? 1 : 0, focused ? 0.12 : 0.14);
+
     draw();
   }
 
+  // ============================================================ 渲染
   function draw() {
     const W = cv.clientWidth, H = cv.clientHeight;
     ctx.clearRect(0, 0, W, H);
 
-    // 池心与本池连线（"依据"的视觉支撑）
+    drawFog(W, H);
+    drawDust(W, H);
+
     const centers = {};
-    for (const key in poolCenters) {
-      const c = poolCenters[key];
-      const wobble = orbitOn ? Math.sin(t * 0.3 + (key.length % 7)) * 0.02 : 0;
-      centers[key] = project({ x: c.x, y: c.y + wobble, z: c.z });
+    for (const key in poolMap) {
+      const pm = poolMap[key];
+      const wob = orbitOn ? Math.sin(t * 0.28 + (key.length % 5)) * 0.015 : 0;
+      centers[key] = project({ x: pm.center.x, y: pm.center.y + wob, z: pm.center.z });
     }
 
-    // 池与池之间的骨架线
-    ctx.lineWidth = 1;
-    for (let i = 0; i < SLOTS.length; i++) {
-      const a = centers[Object.keys(poolCenters)[i]];
-      const b = centers[Object.keys(poolCenters)[(i + 1) % SLOTS.length]];
-      if (!a || !b) continue;
-      ctx.strokeStyle = 'rgba(110,140,165,0.10)';
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    drawBridges(centers);
+    drawPoolClouds(centers);
+
+    for (const o of orbs) {
+      const wob = orbitOn ? o.amp * Math.sin(t * 0.75 + o.phase) : 0;
+      const p = project({ x: o.base.x + wob, y: o.base.y + wob * 0.55, z: o.base.z + wob });
+      o.sx = p.x; o.sy = p.y; o.depth = p.z; o.scale = p.s; o.near = p.near;
     }
 
-    // 计算每球位置
-    for (const d of dots) {
-      const wob = orbitOn ? d.amp * Math.sin(t * 0.8 + d.phase) : 0;
-      const p = project({ x: d.base.x + wob, y: d.base.y + wob * 0.6, z: d.base.z + wob });
-      d.sx = p.x; d.sy = p.y; d.depth = p.z; d.scale = p.s;
-    }
-    dots.sort((a, b) => b.depth - a.depth);
+    drawEvidence(centers);
 
-    // 球到池心的细线
-    for (const d of dots) {
-      const c = centers[d.n.p];
-      if (!c) continue;
-      const alpha = 0.06 + Math.min(0.16, Math.max(0, 1 - d.depth / 4) * 0.16);
-      ctx.strokeStyle = `rgba(120,170,200,${alpha})`;
-      ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(d.sx, d.sy); ctx.stroke();
-    }
-
-    // 同事件连线
     const byId = {};
-    for (const d of dots) byId[d.n.id] = d;
-    for (const e of (data.edges || [])) {
-      const a = byId[e.s], b = byId[e.d];
-      if (!a || !b) continue;
-      ctx.strokeStyle = 'rgba(240,153,123,0.34)';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy); ctx.stroke();
+    for (const o of orbs) byId[o.n.id] = o;
+    drawEventEdges(byId);
+
+    // 深度排序后统一画，中央球也在队列里，才有正确的前后遮挡
+    const items = orbs.map(o => ({ kind: 'orb', o, z: o.depth }));
+    const coreProj = project({ x: 0, y: 0, z: 0 });
+    items.push({ kind: 'core', z: coreProj.z, p: coreProj });
+    items.sort((a, b) => b.z - a.z);
+
+    for (const it of items) {
+      if (it.kind === 'core') drawCoreSphere(it.p);
+      else drawOrb(it.o);
     }
-    ctx.lineWidth = 1;
 
-    // 记忆球
-    for (const d of dots) {
-      const fresh = Math.max(0, 1 - d.n.a / 120);          // 越新越亮
-      const w = Math.min(1, d.n.w);
-      const r = Math.max(2.2, (2.2 + w * 4.4) * (0.55 + d.scale / 26));
-      const near = Math.min(1, Math.max(0.18, 1 - d.depth / 3.4));
-      const isSel = selected === d.n.id, isHov = hovered === d.n.id;
+    drawLabels(centers);
+  }
 
-      if (isSel || isHov) {
-        ctx.beginPath(); ctx.arc(d.sx, d.sy, r + 3.5, 0, 7);
-        ctx.strokeStyle = isSel ? '#4ec9a0' : 'rgba(255,255,255,.5)';
-        ctx.lineWidth = 1.6; ctx.stroke(); ctx.lineWidth = 1;
+  // 底雾：径向渐变，不用 filter
+  function drawFog(W, H) {
+    const dark = isDark();
+    const g = ctx.createRadialGradient(W * 0.5, H * 1.06, 0, W * 0.5, H * 1.06, H * 1.05);
+    if (dark) {
+      g.addColorStop(0, 'rgba(46,92,110,0.26)');
+      g.addColorStop(0.45, 'rgba(28,56,72,0.12)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+    } else {
+      g.addColorStop(0, 'rgba(126,170,196,0.30)');
+      g.addColorStop(0.5, 'rgba(150,186,208,0.14)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+    }
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // 微尘：屏幕空间，不随场景转
+  function drawDust(W, H) {
+    const color = isDark() ? '#cfe6f2' : '#4a6a7d';
+    ctx.fillStyle = color;
+    for (const d of dust) {
+      const x = (d.x * W + Math.sin(t * 0.06 + d.ph) * 14 + W) % W;
+      const y = (d.y * H + Math.cos(t * 0.05 + d.ph) * 10 + H) % H;
+      ctx.globalAlpha = d.a;
+      ctx.beginPath();
+      ctx.arc(x, y, d.r, 0, 7);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // 池心柔光团
+  function drawPoolClouds(centers) {
+    for (const key of poolOrder) {
+      const pm = poolMap[key], c = centers[key];
+      if (!c) continue;
+
+      if (bloomOn) {
+        const r = Math.max(10, (46 * c.s) / 26);
+        const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, r);
+        g.addColorStop(0, hexA(pm.meta.color, 0.30 * c.near));
+        g.addColorStop(0.55, hexA(pm.meta.color, 0.10 * c.near));
+        g.addColorStop(1, hexA(pm.meta.color, 0));
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, 7); ctx.fill();
       }
-      const grd = ctx.createRadialGradient(d.sx - r * .3, d.sy - r * .3, r * .15, d.sx, d.sy, r);
-      grd.addColorStop(0, d.color);
-      grd.addColorStop(1, 'rgba(0,0,0,.0)');
-      ctx.globalAlpha = near * (0.45 + fresh * 0.55);
-      ctx.fillStyle = grd;
-      ctx.beginPath(); ctx.arc(d.sx, d.sy, r, 0, 7); ctx.fill();
-      ctx.globalAlpha = 1;
-    }
 
-    // 池名
-    ctx.font = '11px ui-sans-serif,system-ui,sans-serif';
-    ctx.textAlign = 'center';
-    for (const key in centers) {
-      const c = centers[key], meta = poolCenters[key].meta;
-      if (!meta || !meta.count) continue;
-      ctx.fillStyle = meta.color;
-      ctx.globalAlpha = Math.min(0.9, Math.max(0.3, 1 - c.z / 3));
-      ctx.fillText(meta.label, c.x, c.y - 6);
+      ctx.fillStyle = pm.meta.color;
+      for (const q of pm.cloud) {
+        const breathe = 1 + Math.sin(t * 0.9 + q.ph) * 0.12;
+        const p = project({
+          x: pm.center.x + q.x * breathe,
+          y: pm.center.y + q.y * breathe,
+          z: pm.center.z + q.z * breathe,
+        });
+        const rr = Math.max(0.5, q.s * (p.s / 26) * 0.9);
+        ctx.globalAlpha = 0.30 * p.near;
+        ctx.beginPath(); ctx.arc(p.x, p.y, rr, 0, 7); ctx.fill();
+      }
       ctx.globalAlpha = 1;
     }
   }
 
-  // ---- 交互：拖拽旋转 / 滚轮缩放 / 点击看详情
+  // 跨池的桥
+  function drawBridges(centers) {
+    const bridges = data.bridges || [];
+    if (!bridges.length) {
+      // 没有桥数据就退回池间骨架线，至少不是空的
+      for (let i = 0; i < poolOrder.length; i++) {
+        const a = centers[poolOrder[i]];
+        const b = centers[poolOrder[(i + 1) % poolOrder.length]];
+        if (!a || !b) continue;
+        ctx.strokeStyle = 'rgba(110,150,175,0.10)';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      return;
+    }
+    const maxN = Math.max.apply(null, bridges.map(b => b.n));
+    for (const br of bridges) {
+      const a = centers[br.a], b = centers[br.b];
+      if (!a || !b) continue;
+      const strength = br.n / maxN;
+      ctx.strokeStyle = 'rgba(126,196,220,' + (0.07 + strength * 0.20) + ')';
+      ctx.lineWidth = 0.8 + strength * 1.5;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+
+      // 桥上流动的小点，说明"相关"是活的
+      if (bloomOn && strength > 0.4) {
+        const k = (t * 0.22 + br.n * 0.17) % 1;
+        ctx.globalAlpha = 0.5 * strength;
+        ctx.fillStyle = '#bfe8f5';
+        ctx.beginPath();
+        ctx.arc(lerp(a.x, b.x, k), lerp(a.y, b.y, k), 1.6, 0, 7);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+    ctx.lineWidth = 1;
+  }
+
+  // 依据微粒：球 → 池心，沿路径流动
+  function drawEvidence(centers) {
+    for (const o of orbs) {
+      if (!o.n.e) continue;
+      const c = centers[o.n.p];
+      if (!c) continue;
+
+      ctx.strokeStyle = 'rgba(120,172,200,' + (0.05 + 0.13 * clamp(1 - o.depth / 4, 0, 1)) + ')';
+      ctx.lineWidth = 0.8;
+      ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(o.sx, o.sy); ctx.stroke();
+
+      const count = Math.min(o.n.e, EVIDENCE_DOTS);
+      for (let i = 0; i < count; i++) {
+        const k = (t * 0.30 + i / count + o.phase) % 1;
+        ctx.globalAlpha = 0.34 * (1 - Math.abs(k - 0.5) * 1.4) * o.near;
+        ctx.fillStyle = o.color;
+        ctx.beginPath();
+        ctx.arc(lerp(o.sx, c.x, k), lerp(o.sy, c.y, k), 1.1, 0, 7);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // 同事件边
+  function drawEventEdges(byId) {
+    for (const e of (data.edges || [])) {
+      const a = byId[e.s], b = byId[e.d];
+      if (!a || !b) continue;
+      const hot = focused && (e.s === focused || e.d === focused);
+      ctx.strokeStyle = hot ? 'rgba(255,178,120,0.75)' : 'rgba(240,153,123,0.26)';
+      ctx.lineWidth = hot ? 1.8 : 1.1;
+      ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy); ctx.stroke();
+    }
+    ctx.lineWidth = 1;
+  }
+
+  // 记忆球：偏心高光做出体积，不用滤镜
+  function drawOrb(o) {
+    const w = Math.min(1, o.n.w);
+    const fresh = clamp(1 - o.n.a / 120, 0, 1);
+    const r = Math.max(1.8, (1.9 + w * 4.2) * (0.5 + o.scale / 26));
+
+    let alpha = o.near * (0.42 + fresh * 0.58);
+    if (focused) alpha *= (o.n.id === focused ? 1 : (1 - 0.84 * focusT));
+    if (hovered === o.n.id) alpha = Math.min(1, alpha * 1.3);
+
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = o.color;
+    ctx.beginPath(); ctx.arc(o.sx, o.sy, r, 0, 7); ctx.fill();
+
+    if (r > 2.2) {
+      const hx = o.sx - r * 0.34, hy = o.sy - r * 0.36;
+      const g = ctx.createRadialGradient(hx, hy, 0, hx, hy, r * 1.05);
+      g.addColorStop(0, 'rgba(255,255,255,0.62)');
+      g.addColorStop(0.45, 'rgba(255,255,255,0.14)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(o.sx, o.sy, r, 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    if (focused === o.n.id || hovered === o.n.id) {
+      const isF = focused === o.n.id;
+      ctx.beginPath(); ctx.arc(o.sx, o.sy, r + (isF ? 5 : 3.2), 0, 7);
+      ctx.strokeStyle = isF ? '#4ec9a0' : 'rgba(255,255,255,0.55)';
+      ctx.lineWidth = isF ? 1.8 : 1.4;
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+  }
+
+  // 中央球：每帧跟着投影缩放
+  function drawCoreSphere(p) {
+    const base = 17 * (0.55 + p.s / 30);
+    const r = Math.max(6, base * (1 + Math.sin(t * 1.05) * 0.05) * Math.max(0.15, introEase));
+
+    if (bloomOn) {
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3.4);
+      g.addColorStop(0, 'rgba(232,244,241,0.34)');
+      g.addColorStop(0.4, 'rgba(180,226,214,0.12)');
+      g.addColorStop(1, 'rgba(232,244,241,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r * 3.4, 0, 7); ctx.fill();
+    }
+
+    ctx.fillStyle = '#e8f4f1';
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
+
+    const hx = p.x - r * 0.32, hy = p.y - r * 0.34;
+    const hg = ctx.createRadialGradient(hx, hy, 0, hx, hy, r * 1.15);
+    hg.addColorStop(0, 'rgba(255,255,255,0.9)');
+    hg.addColorStop(0.5, 'rgba(255,255,255,0.2)');
+    hg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = hg;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
+
+    // 内圈阴影：像玻璃球而不是白点
+    ctx.strokeStyle = 'rgba(60,96,110,0.28)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r * 0.72, 0.6, 2.4); ctx.stroke();
+  }
+
+  // 标签：只给权重前 N + 池名
+  function drawLabels(centers) {
+    ctx.font = '11px ui-sans-serif,system-ui,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = isDark() ? '#dfeef5' : '#27424f';
+
+    for (const o of orbs) {
+      if (!labelTop.has(o.n.id)) continue;
+      let alpha = 0.62 * o.near;
+      if (focused) alpha *= (o.n.id === focused ? 1 : (1 - 0.9 * focusT));
+      if (alpha < 0.05) continue;
+      const text = o.n.t.length > 14 ? o.n.t.slice(0, 14) + '…' : o.n.t;
+      ctx.globalAlpha = alpha;
+      ctx.fillText(text, o.sx, o.sy - Math.max(9, (o.scale / 30) * 8) - 4);
+    }
+
+    for (const key of poolOrder) {
+      const c = centers[key], meta = poolMap[key].meta;
+      if (!c) continue;
+      ctx.globalAlpha = clamp(0.62 * c.near, 0.2, 0.9);
+      ctx.fillStyle = meta.color;
+      ctx.fillText(meta.label, c.x, c.y - 4);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ============================================================ 交互
+  function hitTest(clientX, clientY) {
+    const rect = cv.getBoundingClientRect();
+    const mx = clientX - rect.left, my = clientY - rect.top;
+    let best = null, bestD = 1e9;
+    for (const o of orbs) {
+      const d = (o.sx - mx) * (o.sx - mx) + (o.sy - my) * (o.sy - my);
+      const reach = Math.max(11, (o.scale / 24) * 12);
+      if (d < reach * reach && d < bestD) { bestD = d; best = o; }
+    }
+    return best;
+  }
+
   cv.addEventListener('pointerdown', e => {
-    dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
-    cv.classList.add('drag'); cv.setPointerCapture(e.pointerId);
+    dragging = true; moved = 0; vyaw = 0; vpitch = 0;
+    lastX = e.clientX; lastY = e.clientY;
+    cv.classList.add('drag');
+    cv.setPointerCapture(e.pointerId);
   });
+
   cv.addEventListener('pointermove', e => {
     if (!dragging) {
-      // 悬停命中检测（半径放宽一点，球小的时候好点中）
-      const rect = cv.getBoundingClientRect();
-      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-      let found = null, best = 1e9;
-      for (const d of dots) {
-        const dist = (d.sx - mx) ** 2 + (d.sy - my) ** 2;
-        if (dist < 260 && dist < best) { best = dist; found = d.n.id; }
-      }
-      hovered = found;
-      cv.style.cursor = found ? 'pointer' : 'grab';
+      const hit = hitTest(e.clientX, e.clientY);
+      hovered = hit ? hit.n.id : null;
+      cv.classList.toggle('pick', !!hit);
       return;
     }
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     lastX = e.clientX; lastY = e.clientY;
     moved += Math.abs(dx) + Math.abs(dy);
     yaw += dx * 0.006;
-    pitch = Math.max(-1.2, Math.min(1.2, pitch + dy * 0.005));
+    pitch = clamp(pitch + dy * 0.005, -1.25, 1.25);
+    // 记速度，松手后靠它做惯性
+    vyaw = (dx * 0.006 / 0.033) * 0.35;
+    vpitch = (dy * 0.005 / 0.033) * 0.35;
   });
+
   cv.addEventListener('pointerup', e => {
-    dragging = false; cv.classList.remove('drag');
+    dragging = false;
+    cv.classList.remove('drag');
     if (moved < 5) {
-      const rect = cv.getBoundingClientRect();
-      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-      let found = null, best = 1e9;
-      for (const d of dots) {
-        const dist = (d.sx - mx) ** 2 + (d.sy - my) ** 2;
-        if (dist < 260 && dist < best) { best = dist; found = d; }
-      }
-      showCard(found ? found.n : null);
+      const hit = hitTest(e.clientX, e.clientY);
+      showCard(hit ? hit.n : null);
     }
   });
+
   cv.addEventListener('wheel', e => {
     e.preventDefault();
-    zoom = Math.max(0.55, Math.min(2.2, zoom * (e.deltaY > 0 ? 0.93 : 1.07)));
+    zoom = clamp(zoom * (e.deltaY > 0 ? 0.93 : 1.07), 0.5, 2.4);
   }, { passive: false });
 
   function showCard(n) {
-    if (!n) { selected = null; card.classList.remove('on'); return; }
-    selected = n.id;
+    if (!n) {
+      focused = null;
+      card.classList.remove('on');
+      return;
+    }
+    focused = n.id;
     const meta = (data.pools || []).find(p => p.key === n.p) || {};
     document.getElementById('cardTitle').textContent = n.t;
     document.getElementById('cardMeta').innerHTML =
-      `<i class="dot" style="background:${meta.color || '#8fa3b0'};display:inline-block;margin-right:5px"></i>`
-      + `${meta.label || n.p} · 权重 ${n.w.toFixed(2)} · ${n.a < 1 ? '今天' : n.a.toFixed(0) + ' 天前'}`
-      + (n.k ? ` · 被想起 ${n.k} 次` : '')
-      + (n.e ? ` · ${n.e} 条依据` : '');
+      '<i class="dot" style="background:' + (meta.color || '#8fa3b0') + '"></i>' +
+      (meta.label || n.p) + ' · 权重 ' + n.w.toFixed(2) + ' · ' +
+      (n.a < 1 ? '今天' : n.a.toFixed(0) + ' 天前') +
+      (n.k ? ' · 被想起 ' + n.k + ' 次' : '');
     document.getElementById('cardBody').textContent =
-      meta.desc ? `这一层放：${meta.desc}` : '';
+      (n.e ? n.e + ' 条依据，从这颗球连向「' + (meta.label || n.p) + '」的池心。' : '这条没记依据。') +
+      (meta.desc ? '\n这一层放：' + meta.desc : '');
+    document.getElementById('cardHint').textContent =
+      n.ev ? '它属于同一次决策，橙线连着另外几条判断。' : '';
     card.classList.add('on');
   }
 
+  document.getElementById('cardClose').addEventListener('click', () => showCard(null));
+
   btnSpin.addEventListener('click', () => {
-    spinOn = !spinOn; btnSpin.setAttribute('aria-pressed', String(spinOn));
+    spinOn = !spinOn;
+    btnSpin.setAttribute('aria-pressed', String(spinOn));
   });
   btnOrbit.addEventListener('click', () => {
-    orbitOn = !orbitOn; btnOrbit.setAttribute('aria-pressed', String(orbitOn));
+    orbitOn = !orbitOn;
+    btnOrbit.setAttribute('aria-pressed', String(orbitOn));
+  });
+  btnBloom.addEventListener('click', () => {
+    bloomOn = !bloomOn;
+    btnBloom.setAttribute('aria-pressed', String(bloomOn));
   });
   document.getElementById('reset').addEventListener('click', () => {
-    yaw = -0.5; pitch = 0.32; zoom = 1; showCard(null);
+    yaw = -0.5; pitch = 0.30; zoom = 1; vyaw = 0; vpitch = 0;
+    showCard(null);
   });
 
-  // 主题同步：宿主会派发 maibot:context
-  window.addEventListener('maibot:context', () => layout());
+  window.addEventListener('maibot:context', resize);
 
-  layout();
-  new ResizeObserver(layout).observe(cv);
+  // ============================================================ 启动
+  resize();
+  new ResizeObserver(resize).observe(cv);
   load();
   requestAnimationFrame(frame);
 })();
