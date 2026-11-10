@@ -116,3 +116,14 @@
   内联会直接报「custom 页面必须通过 entry 读取 HTML」。
 - **`webui.json` 有 128 KiB 上限**（自定义页 HTML 另算 2 MiB）。
   改回 entry 引用后声明文件只有 12 KB。
+
+## [0.3.1] - 2026-11-10
+
+插件标识修正。
+
+### 变更
+
+- 插件 ID 由 `cangqiong666.mai-chain` 改为 **`maibot.mai-chain`**，
+  作者署名改为「半句」。旧 ID 沿用了一个不该出现在公开仓库里的字符串。
+- 数据目录随之变化：`data/plugins/<新 ID>/`。迁移时把旧的 `chain.db` 与 `patrol/`
+  一起移动即可，数据格式没有任何变化。
