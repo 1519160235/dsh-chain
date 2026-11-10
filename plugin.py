@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Sequence
 
-from maibot_sdk import Field, HookHandler, MaiBotPlugin, PluginConfigBase, Tool
+from maibot_sdk import API, Field, HookHandler, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import HookMode, ToolParameterInfo, ToolParamType
 
 # **必须做的事**：宿主插件加载器只用 spec_from_file_location 加载 plugin.py，
@@ -98,75 +98,144 @@ logger = logging.getLogger("mai_chain")
 INJECT_SEPARATOR = "\n\n"
 
 
-class PoolConfig(PluginConfigBase):
-    """单个池的参数覆盖。留空/0 表示用代码里的默认值。"""
+def _ui(label: str, *, widget: str = "", hint: str = "", icon: str = "") -> Dict[str, Any]:
+    """构造字段的中文界面元数据。
 
-    grace_days: float = Field(default=0.0, description="宽限期（天），0 表示用默认")
-    half_life_days: float = Field(default=0.0, description="半衰期（天），0 表示用默认")
-    archive_days: float = Field(default=0.0, description="归档线（天），0 表示用默认")
+    ``label`` 走 ``json_schema_extra``，这是宿主配置页**唯一**会渲染成中文标题的入口；
+    ``Field(description=...)`` 只用于代码内注释，界面上仍显示字段名。
+    """
+
+    extra: Dict[str, Any] = {"label": label}
+    if widget:
+        extra["x-widget"] = widget
+    if hint:
+        extra["hint"] = hint
+    if icon:
+        extra["x-icon"] = icon
+    return extra
+
+
+class PoolConfig(PluginConfigBase):
+    """单个池的参数覆盖。
+
+    只填你想改的那项，留 0 表示沿用代码里的默认值。
+    池的 key 见下表：``core`` / ``fact`` / ``skillRule`` / ``skillExp`` /
+    ``dailyCore`` / ``dailyPartial`` / ``emotion`` / ``hippocampus``。
+    """
+
+    grace_days: float = Field(
+        default=0.0,
+        json_schema_extra=_ui("宽限期（天）", widget="input", hint="这段时间内不衰减，0 表示用默认值"),
+    )
+    half_life_days: float = Field(
+        default=0.0,
+        json_schema_extra=_ui("半衰期（天）", widget="input", hint="权重淡到一半所需天数，越大忘得越慢"),
+    )
+    archive_days: float = Field(
+        default=0.0,
+        json_schema_extra=_ui("归档线（天）", widget="input", hint="超过这个天数就不再进注入，0 表示用默认值"),
+    )
 
 
 class PluginSection(PluginConfigBase):
     """主开关。
 
-    ``config_version`` 是宿主的硬性要求：配置节缺少它时，宿主会拒绝加载插件，
-    只保留配置管理页面（"插件配置文件缺少 plugin.config_version 版本号"）。
-    升级配置结构时改这里的值，宿主会按新骨架重建并迁移旧字段。
+    ``config_version`` 是宿主硬性要求：配置节缺少它时，宿主会拒绝加载插件，
+    只保留配置管理页面。升级配置结构时改这里的值，宿主会按新骨架重建并迁移旧字段。
     """
 
     __ui_label__ = "插件"
     __ui_icon__ = "package"
     __ui_order__ = 0
 
-    enabled: bool = Field(default=False, description="是否启用思维链记忆")
-    config_version: str = Field(default="1.0.0", description="配置版本（宿主用于升级时迁移字段）")
+    enabled: bool = Field(
+        default=False,
+        json_schema_extra=_ui("启用思维链记忆", widget="switch"),
+    )
+    config_version: str = Field(
+        default="1.0.0",
+        json_schema_extra=_ui("配置版本", widget="input", hint="宿主用它判断要不要迁移旧配置，非必要不要改"),
+    )
 
 
 class InjectionSection(PluginConfigBase):
-    """注入段配置。"""
+    """注入段配置：每一轮 Planner 请求前，往系统提示里追加的那段话。"""
 
     __ui_label__ = "注入"
     __ui_icon__ = "file-text"
     __ui_order__ = 1
 
-    enabled: bool = Field(default=True, description="是否每轮注入思维链（关掉则只剩工具可查）")
-    max_chars: int = Field(default=INJECT_MAX_CHARS, description="注入段字符上限（越大越贵，但记得越全）")
-    include_hippocampus: bool = Field(default=True, description="是否显示「最近她说过的话」小窗")
-    inject_mood: bool = Field(default=True, description="是否注入「我现在」情绪行")
-    inject_working: bool = Field(default=True, description="是否注入「还没做完的事」")
+    enabled: bool = Field(
+        default=True,
+        json_schema_extra=_ui("每轮注入", widget="switch", hint="关掉后只剩 chain_recall 等工具可查"),
+    )
+    max_chars: int = Field(
+        default=INJECT_MAX_CHARS,
+        json_schema_extra=_ui("注入字符上限", widget="input", hint="越大记得越全也越费 token；默认 24000 约 8k token"),
+    )
+    include_hippocampus: bool = Field(
+        default=True,
+        json_schema_extra=_ui("显示「最近说过的话」", widget="switch", hint="原始片段的原文小窗，约 300 字符"),
+    )
+    inject_mood: bool = Field(
+        default=True,
+        json_schema_extra=_ui("注入当前情绪", widget="switch", hint="「我现在」那一行，不依赖有没有记忆"),
+    )
+    inject_working: bool = Field(
+        default=True,
+        json_schema_extra=_ui("注入未完成的事", widget="switch", hint="从话里认出的待办与承诺，最多 3 条"),
+    )
 
 
 class LifecycleSection(PluginConfigBase):
-    """生命周期配置。"""
+    """生命周期配置：记忆怎么随时间和被想起次数变化。"""
 
     __ui_label__ = "生命周期"
     __ui_icon__ = "activity"
     __ui_order__ = 2
 
-    core_max: int = Field(default=CORE_MAX, description="核心池上限（满了拒绝新增原则/人格）")
-    auto_recall_mark: bool = Field(default=True, description="被注入命中时自动记一次 recall（会延长半衰期）")
+    core_max: int = Field(
+        default=CORE_MAX,
+        json_schema_extra=_ui("核心池上限", widget="input", hint="满了会拒绝新增「原则/人格」，防止核心无限膨胀"),
+    )
+    auto_recall_mark: bool = Field(
+        default=True,
+        json_schema_extra=_ui("自动记录被想起", widget="switch", hint="注入命中时记一次 recall，会让这条活得更久"),
+    )
 
 
 class PatrolSection(PluginConfigBase):
-    """夜巡配置。"""
+    """夜巡配置：每天检查一遍记忆库，产出可审计的报告。"""
 
     __ui_label__ = "夜巡"
     __ui_icon__ = "moon"
     __ui_order__ = 3
 
-    enabled: bool = Field(default=False, description="是否每天自动跑一次夜巡")
-    hour: int = Field(default=18, description="每天几点之后开始（0-23）")
-    auto_rebalance: bool = Field(default=False, description="自动夜巡是否执行归整（默认只出报告）")
+    enabled: bool = Field(
+        default=False,
+        json_schema_extra=_ui("每天自动夜巡", widget="switch", hint="开启后每天到点自动检查一次"),
+    )
+    hour: int = Field(
+        default=18,
+        json_schema_extra=_ui("开始时间（时）", widget="input", hint="0 到 23，过了这个点才开始跑"),
+    )
+    auto_rebalance: bool = Field(
+        default=False,
+        json_schema_extra=_ui("自动执行归整", widget="switch", hint="默认只出报告不建议；开启才会真的改权重"),
+    )
 
 
 class MaiChainConfig(PluginConfigBase):
     """思维链记忆插件配置。"""
 
-    plugin: PluginSection = Field(default_factory=PluginSection)
-    injection: InjectionSection = Field(default_factory=InjectionSection)
-    lifecycle: LifecycleSection = Field(default_factory=LifecycleSection)
-    patrol: PatrolSection = Field(default_factory=PatrolSection)
-    pools: Dict[str, PoolConfig] = Field(default_factory=dict, description="按池覆盖生命周期参数")
+    plugin: PluginSection = Field(default_factory=PluginSection, json_schema_extra=_ui("插件"))
+    injection: InjectionSection = Field(default_factory=InjectionSection, json_schema_extra=_ui("注入"))
+    lifecycle: LifecycleSection = Field(default_factory=LifecycleSection, json_schema_extra=_ui("生命周期"))
+    patrol: PatrolSection = Field(default_factory=PatrolSection, json_schema_extra=_ui("夜巡"))
+    pools: Dict[str, PoolConfig] = Field(
+        default_factory=dict,
+        json_schema_extra=_ui("按池覆盖", hint="只填想改的项；留空则全部使用代码里的默认参数"),
+    )
 
 
 class MaiChainPlugin(MaiBotPlugin):
@@ -953,6 +1022,247 @@ class MaiChainPlugin(MaiBotPlugin):
         except Exception as exc:  # noqa: BLE001
             logger.exception("chain_stats 失败")
             return {"success": False, "error": str(exc)}
+
+    # ------------------------------------------------------------------ WebUI 数据接口
+
+    @API("webui_overview", description="思维链面板的概览数据：统计、各池分布、最近记忆", version="1")
+    async def webui_overview(self) -> Dict[str, Any]:
+        """给「概览」页提供一份只读快照。
+
+        整页数据一次给全，避免前端为每块卡片各发一次请求。任何异常都返回空结构，
+        页面据此显示空状态，而不是整页报错。
+        """
+
+        try:
+            store = await self._ensure_ready()
+            entries = await asyncio.to_thread(store.load_all)
+            raw_stats = await asyncio.to_thread(store.stats)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("WebUI 概览读取失败: %s", exc)
+            return {
+                "available": False,
+                "error": str(exc),
+                "total": 0, "live": 0, "events": 0, "edges": 0,
+                "pools": [], "pool_chart": [], "recent": [],
+                "retrieval": "不可用", "core_usage": "0 / %d" % CORE_MAX,
+                "core_percent": 0,
+            }
+
+        # 各池分布（按注入顺序排，空池也列出来，方便看出哪个池是空的）
+        counts: Dict[str, int] = {}
+        for entry in entries:
+            key = str(entry.get("pool") or "hippocampus")
+            counts[key] = counts.get(key, 0) + 1
+
+        pool_rows: List[Dict[str, Any]] = []
+        chart_rows: List[Dict[str, Any]] = []
+        for key in POOLS:
+            definition = POOLS[key]
+            count = counts.get(key, 0)
+            pool_rows.append(
+                {
+                    "name": definition.label,
+                    "count": count,
+                    "half_life": "永不衰减" if definition.half_life_days == float("inf") else f"{int(definition.half_life_days)} 天",
+                    "desc": definition.desc,
+                }
+            )
+            chart_rows.append({"name": definition.label, "count": count})
+
+        # 最近记忆（按写入时间倒序取前 8 条）
+        recent = sorted(entries, key=lambda item: float(item.get("created_at") or 0), reverse=True)[:8]
+        recent_rows = [
+            {
+                "title": str(item.get("judgement") or item.get("conclusion") or "(无标题)")[:60],
+                "pool": POOLS.get(str(item.get("pool")), POOLS["hippocampus"]).label,
+                "time": _fmt_time(str(item.get("ts") or "")),
+                "weight": round(float(item.get("weight") or 0), 2),
+            }
+            for item in recent
+        ]
+
+        core_count_now = sum(1 for item in entries if item.get("pool") == "core")
+        core_limit = int(self._cfg().lifecycle.core_max) or CORE_MAX
+
+        return {
+            "available": True,
+            "error": "",
+            "total": int(raw_stats.get("total") or 0),
+            "live": int(raw_stats.get("live") or 0),
+            "events": int(raw_stats.get("events") or 0),
+            "edges": int(raw_stats.get("edges") or 0),
+            "pools": pool_rows,
+            "pool_chart": chart_rows,
+            "recent": recent_rows,
+            "retrieval": "已就绪（分词可用）" if retrieval_ready() else f"降级（只有字面匹配）{retrieval_error()}".strip(),
+            "core_usage": f"{core_count_now} / {core_limit}",
+            "core_percent": round(min(100, core_count_now * 100 / max(1, core_limit)), 1),
+        }
+
+    @API("webui_memories", description="分页读取记忆列表，可按池和关键词筛选", version="1")
+    async def webui_memories(
+        self,
+        pool: str = "all",
+        keyword: str = "",
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Dict[str, Any]:
+        """给「记忆列表」页用。返回当前页的行 + 总页数。
+
+        ``pool`` 传 ``all`` 或空串表示不过滤 —— 下拉框的「全部」项必须有个非空值
+        （宿主 schema 不允许空字符串选项），所以这里把 ``all`` 也当成不筛选。
+        """
+
+        try:
+            store = await self._ensure_ready()
+            entries = await asyncio.to_thread(store.load_all, include_superseded=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("WebUI 记忆列表读取失败: %s", exc)
+            return {"rows": [], "total": 0, "pages": 1, "page": 1, "error": str(exc)}
+
+        selected_pool = str(pool or "").strip()
+        if selected_pool and selected_pool != "all":
+            entries = [item for item in entries if item.get("pool") == selected_pool]
+        text = str(keyword or "").strip()
+        if text:
+            entries = [
+                item
+                for item in entries
+                if text in f"{item.get('judgement') or ''} {item.get('conclusion') or ''}"
+            ]
+
+        entries.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
+        size = max(1, min(100, int(page_size or 20)))
+        total = len(entries)
+        pages = max(1, (total + size - 1) // size)
+        current = max(1, min(pages, int(page or 1)))
+        window = entries[(current - 1) * size : current * size]
+
+        rows = [
+            {
+                "title": str(item.get("judgement") or item.get("conclusion") or "(无标题)"),
+                "pool": POOLS.get(str(item.get("pool")), POOLS["hippocampus"]).label,
+                "time": _fmt_time(str(item.get("ts") or "")),
+                "weight": round(float(item.get("weight") or 0), 2),
+                "touches": int(item.get("touch_count") or 0),
+                "state": "已退役" if item.get("superseded") else "生效中",
+            }
+            for item in window
+        ]
+        return {"rows": rows, "total": total, "pages": pages, "page": current, "error": ""}
+
+    @API("webui_detail", description="读取单条记忆的完整内容：判断、依据、犹豫、结论", version="1")
+    async def webui_detail(self, title: str) -> Dict[str, Any]:
+        """按标题精确取一条的详情（列表行点进去看）。
+
+        标题可能重名，所以取**最新**的一条；这不影响审计，因为列表本身按时间排。
+        """
+
+        try:
+            store = await self._ensure_ready()
+            entries = await asyncio.to_thread(store.load_all, include_superseded=True)
+        except Exception as exc:  # noqa: BLE001
+            return {"found": False, "error": str(exc)}
+
+        wanted = str(title or "").strip()
+        matches = [
+            item
+            for item in entries
+            if str(item.get("judgement") or item.get("conclusion") or "").strip() == wanted
+        ]
+        if not matches:
+            return {"found": False, "reason": "这条记忆已经不在库里了"}
+        entry = max(matches, key=lambda item: float(item.get("created_at") or 0))
+        evidence = entry.get("evidence") or []
+        hesitation = entry.get("hesitation") or []
+        return {
+            "found": True,
+            "title": str(entry.get("judgement") or "(无判断)"),
+            "conclusion": str(entry.get("conclusion") or "（还没定论）"),
+            "evidence": "\n".join(f"· {item}" for item in evidence) if evidence else "（没有记依据）",
+            "hesitation": "\n".join(f"· {item}" for item in hesitation) if hesitation else "（没有记犹豫）",
+            "pool": POOLS.get(str(entry.get("pool")), POOLS["hippocampus"]).label,
+            "time": _fmt_time(str(entry.get("ts") or "")),
+            "weight": f"{float(entry.get('weight') or 0):.2f}",
+            "touches": f"{int(entry.get('touch_count') or 0)} 次",
+            "state": "已退役（不再采信）" if entry.get("superseded") else "生效中",
+        }
+
+    @API("webui_patrol", description="读取最近一次夜巡报告", version="1")
+    async def webui_patrol(self) -> Dict[str, Any]:
+        """给「夜巡」页用。没有报告时返回空状态而不是报错。"""
+
+        try:
+            data_dir = self.ctx.paths.data_dir / "patrol"
+        except Exception as exc:  # noqa: BLE001
+            return {"exists": False, "reason": str(exc), "sections": [], "report": ""}
+
+        if not data_dir.is_dir():
+            return {"exists": False, "reason": "还没跑过夜巡。点下面的按钮跑一次。", "sections": [], "report": ""}
+
+        reports = sorted(data_dir.glob("*.md"), key=lambda p: p.name, reverse=True)
+        if not reports:
+            return {"exists": False, "reason": "还没跑过夜巡。点下面的按钮跑一次。", "sections": [], "report": ""}
+
+        latest = reports[0]
+        try:
+            text = latest.read_text(encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            return {"exists": False, "reason": f"报告读不出来：{exc}", "sections": [], "report": ""}
+
+        # 报告本身是 Markdown；按「## 」切成小节，前端用折叠块逐节显示。
+        sections: List[Dict[str, Any]] = []
+        current_title = ""
+        buffer: List[str] = []
+        for line in text.splitlines():
+            if line.startswith("## "):
+                if current_title:
+                    sections.append({"title": current_title, "body": "\n".join(buffer).strip()})
+                current_title = line[3:].strip()
+                buffer = []
+            elif current_title:
+                buffer.append(line)
+        if current_title:
+            sections.append({"title": current_title, "body": "\n".join(buffer).strip()})
+
+        return {"exists": True, "date": latest.stem, "sections": sections, "report": text}
+
+    @API("webui_run_patrol", description="立即跑一次夜巡并保存报告", version="1")
+    async def webui_run_patrol(self) -> Dict[str, Any]:
+        """面板上的「跑一次夜巡」按钮。只出报告，不改数据。"""
+
+        if not self._enabled():
+            raise ValueError("插件未启用，先在插件配置里打开")
+        store = await self._ensure_ready()
+        today = datetime.now().strftime("%Y-%m-%d")
+        await self._run_patrol(store, today, auto=False)
+        return await self.webui_patrol()
+
+    @API("webui_append", description="从面板手动写一条记忆", version="1")
+    async def webui_append(
+        self,
+        judgement: str,
+        conclusion: str = "",
+        tags: str = "",
+    ) -> Dict[str, Any]:
+        """面板上的「写一条」表单。tags 用逗号分隔。"""
+
+        if not self._enabled():
+            raise ValueError("插件未启用，先在插件配置里打开")
+        text = str(judgement or "").strip()
+        if not text:
+            raise ValueError("判断不能为空")
+        tag_list = [item.strip() for item in str(tags or "").replace("，", ",").split(",") if item.strip()]
+        return await self.handle_append(judgement=text, conclusion=conclusion, tags=tag_list)
+
+
+def _fmt_time(value: str) -> str:
+    """把 ISO 时间裁成「月-日 时:分」，界面上够看就行。"""
+
+    parsed = parse_ts(value)
+    if parsed is None:
+        return "—"
+    return datetime.fromtimestamp(parsed).strftime("%m-%d %H:%M")
 
 
 def create_plugin() -> MaiChainPlugin:

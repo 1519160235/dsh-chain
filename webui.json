@@ -1,0 +1,444 @@
+{
+  "schema_version": 2,
+  "required_capabilities": [
+    "declarative_basic",
+    "structured_arguments"
+  ],
+  "pages": [
+    {
+      "id": "overview",
+      "title": "思维链概览",
+      "description": "看一眼记忆库整体状态：有多少条、各池分布、最近写了什么。",
+      "icon": "chart",
+      "queries": {
+        "data": {
+          "api": "webui_overview",
+          "version": "1"
+        }
+      },
+      "content": [
+        {
+          "type": "grid",
+          "columns": 4,
+          "children": [
+            {
+              "type": "stat",
+              "label": "记忆总数",
+              "value": {
+                "source": "data",
+                "field": "total"
+              }
+            },
+            {
+              "type": "stat",
+              "label": "生效中",
+              "value": {
+                "source": "data",
+                "field": "live"
+              }
+            },
+            {
+              "type": "stat",
+              "label": "被想起记录",
+              "value": {
+                "source": "data",
+                "field": "events"
+              }
+            },
+            {
+              "type": "stat",
+              "label": "核心池占用",
+              "value": {
+                "source": "data",
+                "field": "core_usage"
+              }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "value": {
+            "source": "data",
+            "field": "retrieval"
+          },
+          "label": "检索能力"
+        },
+        {
+          "type": "chart",
+          "label": "八个池各有多少条",
+          "chart_type": "bar",
+          "x": "name",
+          "y": "count",
+          "value": {
+            "source": "data",
+            "field": "pool_chart"
+          }
+        },
+        {
+          "type": "card",
+          "label": "最近写下的判断",
+          "children": [
+            {
+              "type": "table",
+              "value": {
+                "source": "data",
+                "field": "recent"
+              },
+              "columns": [
+                {
+                  "field": "title",
+                  "label": "判断"
+                },
+                {
+                  "field": "pool",
+                  "label": "所属池"
+                },
+                {
+                  "field": "time",
+                  "label": "写入时间"
+                },
+                {
+                  "field": "weight",
+                  "label": "当前权重"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "collapsible",
+          "label": "八个池分别是什么、活多久",
+          "children": [
+            {
+              "type": "text",
+              "value": "不同种类的记忆活该有不同的寿命。核心永不衰减；事实一年才淡一半；铁律两年；经验两个月；一次性进展二十天就淡；海马体是原料缓冲区，永不注入。"
+            },
+            {
+              "type": "table",
+              "value": {
+                "source": "data",
+                "field": "pools"
+              },
+              "columns": [
+                {
+                  "field": "name",
+                  "label": "池"
+                },
+                {
+                  "field": "count",
+                  "label": "条数"
+                },
+                {
+                  "field": "half_life",
+                  "label": "半衰期"
+                },
+                {
+                  "field": "desc",
+                  "label": "放什么"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "memories",
+      "title": "记忆列表",
+      "description": "翻看每一条记忆：判断、所属池、权重、被想起几次。点一行看完整内容。",
+      "icon": "list",
+      "queries": {
+        "rows": {
+          "api": "webui_memories",
+          "version": "1"
+        },
+        "detail": {
+          "api": "webui_detail",
+          "version": "1"
+        }
+      },
+      "content": [
+        {
+          "type": "grid",
+          "columns": 2,
+          "children": [
+            {
+              "type": "input",
+              "name": "keyword",
+              "label": "搜关键词",
+              "value": ""
+            },
+            {
+              "type": "select",
+              "name": "pool",
+              "label": "只看某个池",
+              "value": "all",
+              "options": [
+                {
+                  "label": "全部",
+                  "value": "all"
+                },
+                {
+                  "label": "核心（原则/人格）",
+                  "value": "core"
+                },
+                {
+                  "label": "事实",
+                  "value": "fact"
+                },
+                {
+                  "label": "铁律",
+                  "value": "skillRule"
+                },
+                {
+                  "label": "经验",
+                  "value": "skillExp"
+                },
+                {
+                  "label": "核心日常",
+                  "value": "dailyCore"
+                },
+                {
+                  "label": "片面日常",
+                  "value": "dailyPartial"
+                },
+                {
+                  "label": "情绪",
+                  "value": "emotion"
+                },
+                {
+                  "label": "海马体（原料）",
+                  "value": "hippocampus"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "value": "还没写过任何记忆。可以让麦麦在对话里记一条，或在下面直接写。",
+          "when": {
+            "reference": {
+              "source": "rows",
+              "field": "rows"
+            },
+            "operator": "empty"
+          }
+        },
+        {
+          "type": "table",
+          "label": "点任意一行看完整内容",
+          "value": {
+            "source": "rows",
+            "field": "rows"
+          },
+          "when": {
+            "reference": {
+              "source": "rows",
+              "field": "rows"
+            },
+            "operator": "not_empty"
+          },
+          "selection": "picked",
+          "detail": "detailDialog",
+          "columns": [
+            {
+              "field": "title",
+              "label": "判断"
+            },
+            {
+              "field": "pool",
+              "label": "所属池"
+            },
+            {
+              "field": "time",
+              "label": "写入时间"
+            },
+            {
+              "field": "weight",
+              "label": "权重"
+            },
+            {
+              "field": "touches",
+              "label": "被想起"
+            },
+            {
+              "field": "state",
+              "label": "状态"
+            }
+          ]
+        },
+        {
+          "type": "dialog",
+          "name": "detailDialog",
+          "label": "这条记忆",
+          "children": [
+            {
+              "type": "text",
+              "label": "判断",
+              "value": {
+                "scope": "selection",
+                "source": "picked",
+                "field": "title"
+              }
+            },
+            {
+              "type": "text",
+              "label": "所属池",
+              "value": {
+                "scope": "selection",
+                "source": "picked",
+                "field": "pool"
+              }
+            },
+            {
+              "type": "text",
+              "label": "状态",
+              "value": {
+                "scope": "selection",
+                "source": "picked",
+                "field": "state"
+              }
+            },
+            {
+              "type": "collapsible",
+              "label": "看完整内容（依据 / 犹豫 / 结论）",
+              "children": [
+                {
+                  "type": "text",
+                  "label": "结论",
+                  "value": {
+                    "source": "detail",
+                    "field": "conclusion"
+                  }
+                },
+                {
+                  "type": "text",
+                  "label": "依据",
+                  "value": {
+                    "source": "detail",
+                    "field": "evidence"
+                  },
+                  "format": "plain"
+                },
+                {
+                  "type": "text",
+                  "label": "当时的犹豫",
+                  "value": {
+                    "source": "detail",
+                    "field": "hesitation"
+                  },
+                  "format": "plain"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "label": "手动写一条记忆",
+          "children": [
+            {
+              "type": "text",
+              "value": "「判断」写一句话结论；「依据」和「犹豫」可以在对话里让麦麦补。标签决定它活多久：写「铁律」活得久，写「日常」速朽，不写会进海马体等审查。"
+            },
+            {
+              "type": "input",
+              "name": "judgement",
+              "label": "判断（必填）",
+              "value": ""
+            },
+            {
+              "type": "input",
+              "name": "conclusion",
+              "label": "结论"
+            },
+            {
+              "type": "input",
+              "name": "tags",
+              "label": "标签（逗号分隔）",
+              "value": ""
+            },
+            {
+              "type": "button",
+              "label": "写进记忆库",
+              "action": "write"
+            }
+          ]
+        }
+      ],
+      "actions": {
+        "write": {
+          "api": "webui_append",
+          "version": "1"
+        }
+      }
+    },
+    {
+      "id": "patrol",
+      "title": "夜巡报告",
+      "description": "每天检查一遍：哪些记忆久未命中、有没有重复、哪些没归类。默认只出报告，不动数据。",
+      "icon": "database",
+      "queries": {
+        "report": {
+          "api": "webui_patrol",
+          "version": "1"
+        }
+      },
+      "actions": {
+        "run": {
+          "api": "webui_run_patrol",
+          "version": "1"
+        }
+      },
+      "content": [
+        {
+          "type": "text",
+          "value": "还没跑过夜巡。点下面的按钮跑一次，会生成一份可审计的检查报告。",
+          "when": {
+            "reference": {
+              "source": "report",
+              "field": "exists"
+            },
+            "operator": "equals",
+            "expected": false
+          }
+        },
+        {
+          "type": "text",
+          "value": {
+            "source": "report",
+            "field": "date"
+          },
+          "label": "最近一次"
+        },
+        {
+          "type": "button",
+          "label": "跑一次夜巡",
+          "action": "run"
+        },
+        {
+          "type": "collapsible",
+          "label": "展开完整报告",
+          "when": {
+            "reference": {
+              "source": "report",
+              "field": "exists"
+            },
+            "operator": "truthy"
+          },
+          "children": [
+            {
+              "type": "text",
+              "value": {
+                "source": "report",
+                "field": "report"
+              },
+              "format": "log"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -56,34 +56,32 @@
 - 情绪判定为关键词级，粗粒度。
 - **尚未在真实 MaiBot 环境验证**：核心算法有单测，注入层需实机联调。
 
-## [0.1.1] - 2026-11-09
+## [0.2.0] - 2026-11-10
 
-实机适配修正。在 MaiBot 1.4.2 + SDK 2.21.0（Windows / uv 安装）上真实跑通。
-
-### 修复
-
-- **`HookMode` 导入路径错误**：它不在 `maibot_sdk` 顶层，而在 `maibot_sdk.types`。
-  写错会在导入阶段直接 `ImportError`，插件根本加载不起来。
-- **`import mai_chain` 找不到模块**：宿主插件加载器只用
-  `spec_from_file_location` 加载 `plugin.py`，临时加进 `sys.path` 的是
-  `plugins/`（`plugin_dir.parent`）而**不是插件自己的目录**。
-  子包导入必然失败。已在 `plugin.py` 顶部把自身目录 append 进 `sys.path`。
-- **manifest 字段被宿主拒绝**：`_manifest.json` 的 Pydantic schema 用
-  `extra="forbid"` 严格校验，`files` / `keywords` / `changelog` 均不在白名单，
-  会导致「插件注册失败」。已裁剪为白名单内的 14 个字段。
-- **缺 `plugin.config_version`**：宿主要求配置节必须带版本号，否则只加载配置管理页面、
-  不激活功能（「当前版本策略不再兼容无版本配置」）。已在 `PluginSection` 补上。
+可视化面板 + 全中文配置。
 
 ### 新增
 
-- 插件图标 `assets/icon.svg`：八池环 + 中心节点，深色圆角底，manifest 指向它。
-- 插件改名为「思维链记忆」，ID `cangqiong666.mai-chain`，Python 包 `mai_chain`
-  （去掉 dsh 前缀，避免在 MaiBot 里造成名不副实）。
+- **WebUI 声明式面板（协议 2）**，三个页面：
+  - **思维链概览** —— 总数/生效/被想起/核心池占用四个指标卡，八个池的分布柱状图，
+    最近写下的判断表格，以及可折叠的「八个池分别活多久」对照表。
+  - **记忆列表** —— 按池筛选 + 关键词搜索，分页表格；点任意一行弹出详情，
+    展开可看完整的依据 / 犹豫 / 结论；底部还有「手动写一条」表单。
+  - **夜巡报告** —— 一键跑夜巡，展开完整报告；没有报告时显示引导文案而不是报错。
+- 6 个 WebUI 数据接口：`webui_overview` / `webui_memories` / `webui_detail` /
+  `webui_patrol` / `webui_run_patrol` / `webui_append`。
+- 插件图标 `assets/icon.svg`（八池环 + 中心节点）。
 
-### 实机验证结果
+### 变更
 
-- 宿主加载：`已加载=7`（含 `cangqiong666.mai-chain`），`失败=0`
-- 组件注册：9 个 TOOL + 1 个 HOOK_HANDLER
-- 端到端：写入 → 检索 → 元记忆 → 统计 → 注入 Hook 全通
-- 注入实测：system item 追加 1 个 text part，253 字符，**原 items 对象未被污染**
-- 存储：数据目录已生成 `chain.db`（WAL 模式）
+- **配置项全部改为中文**。`Field(description=...)` 只用于代码内注释，
+  界面标题改走 `json_schema_extra={"label": "..."}`，补充 `hint` 说明；
+  配置节标题由 `__ui_label__` 提供。
+
+### 修复（WebUI 协议差异）
+
+- **协议版本**：宿主已升级到 WebUI 协议 2，`schema_version` 必须为 `2`，
+  否则整个 webui.json 被拒绝（"WebUI 协议已升级为 2"）。
+- **下拉选项不能为空字符串**：`select.options[].value` 至少 1 个字符，
+  「全部」项的 value 改为 `all`，后端把 `all` 与空串都当成不筛选。
+- **条件字段名**：`equals` 用 `expected` 而不是 `value`；节点标题是 `label` 不是 `labels`。
