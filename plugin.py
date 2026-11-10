@@ -1099,6 +1099,113 @@ class MaiChainPlugin(MaiBotPlugin):
             "core_percent": round(min(100, core_count_now * 100 / max(1, core_limit)), 1),
         }
 
+    @API("webui_graph", description="思维链星云图数据：节点（记忆）与连线（依据/同事件）", version="1")
+    async def webui_graph(self, limit: int = 220) -> Dict[str, Any]:
+        """给 3D 星云页用。
+
+        一次给全，前端本地做 3D 投影和动画 —— 双方都不需要再发请求。
+
+        节点字段刻意精简（`id/t/p/pool/w/a`），因为星云可能有几百个球，
+        字段名长一倍就是几十 KB 的传输差异。
+
+        Args:
+            limit: 最多返回多少个节点（防止几千条时前端卡住）。
+
+        Returns:
+            ``{"pools": [...], "nodes": [...], "edges": [...], "stats": {...}, "theme": {...}}``
+        """
+
+        try:
+            store = await self._ensure_ready()
+            entries = await asyncio.to_thread(store.load_all, include_superseded=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("WebUI 星云读取失败: %s", exc)
+            return {"nodes": [], "edges": [], "pools": [], "error": str(exc)}
+
+        ceiling = max(20, min(600, int(limit or 220)))
+
+        # 池的展示参数：颜色 + 中文名 + 是否常驻。顺序沿用注入顺序，前端据此排布。
+        palette = {
+            "core": "#e8f4f1",
+            "fact": "#6fb7d8",
+            "skillRule": "#f0997b",
+            "skillExp": "#97c459",
+            "dailyCore": "#b5a4e8",
+            "dailyPartial": "#8fa3b0",
+            "emotion": "#f4c0d1",
+            "hippocampus": "#5f6b73",
+        }
+
+        # 只在有内容时算年龄，空库直接返回骨架，前端显示空状态。
+        live = [item for item in entries if not item.get("superseded")]
+        total = len(live)
+        # 超量时按"权重 + 新鲜度"挑，保证图上留下的是重要的那些。
+        if total > ceiling:
+            imported = sorted(
+                live,
+                key=lambda item: (float(item.get("weight") or 0), float(item.get("created_at") or 0)),
+                reverse=True,
+            )[:ceiling]
+        else:
+            imported = live
+
+        nodes: List[Dict[str, Any]] = []
+        counts: Dict[str, int] = {}
+        for index, item in enumerate(imported):
+            pool_key = str(item.get("pool") or "hippocampus")
+            counts[pool_key] = counts.get(pool_key, 0) + 1
+            evidence = item.get("evidence") or []
+            nodes.append(
+                {
+                    "id": str(item.get("id") or index),
+                    "t": str(item.get("judgement") or item.get("conclusion") or "(无标题)")[:120],
+                    "p": pool_key,
+                    "w": round(float(item.get("weight") or 0), 3),
+                    "a": round(_age_days(item), 1),
+                    "e": len(evidence),
+                    "k": int(item.get("touch_count") or 0),
+                    "ev": str(item.get("event_id") or ""),
+                }
+            )
+
+        # 连线：同一次决策的几条判断串起来（上游的 eventId 语义）。
+        edges: List[Dict[str, Any]] = []
+        by_event: Dict[str, List[str]] = {}
+        for node in nodes:
+            if node["ev"]:
+                by_event.setdefault(node["ev"], []).append(node["id"])
+        for event_id, ids in by_event.items():
+            for i in range(len(ids) - 1):
+                edges.append({"s": ids[i], "d": ids[i + 1], "k": "event", "w": 0.8})
+
+        # 有依据的节点，从池心拉一条"依据线"（前端按池心坐标画，不需要真端点）。
+        pool_rows = [
+            {
+                "key": key,
+                "label": POOLS[key].label,
+                "color": palette.get(key, "#8fa3b0"),
+                "count": counts.get(key, 0),
+                "half_life": "永不衰减"
+                if POOLS[key].half_life_days == float("inf")
+                else f"{int(POOLS[key].half_life_days)} 天",
+                "desc": POOLS[key].desc,
+            }
+            for key in POOLS
+        ]
+
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "pools": pool_rows,
+            "stats": {
+                "shown": len(nodes),
+                "total": total,
+                "truncated": total > len(nodes),
+                "events": sum(1 for n in nodes if n["ev"]),
+            },
+            "error": "",
+        }
+
     @API("webui_memories", description="分页读取记忆列表，可按池和关键词筛选", version="1")
     async def webui_memories(
         self,
@@ -1254,6 +1361,15 @@ class MaiChainPlugin(MaiBotPlugin):
             raise ValueError("判断不能为空")
         tag_list = [item.strip() for item in str(tags or "").replace("，", ",").split(",") if item.strip()]
         return await self.handle_append(judgement=text, conclusion=conclusion, tags=tag_list)
+
+
+def _age_days(entry: Dict[str, Any]) -> float:
+    """距最后一次被碰过了多少天（星云用它算"新鲜度"）。"""
+
+    reference = parse_ts(str(entry.get("last_touched") or entry.get("ts") or ""))
+    if reference is None:
+        return 0.0
+    return max(0.0, (datetime.now().timestamp() - reference) / 86400.0)
 
 
 def _fmt_time(value: str) -> str:

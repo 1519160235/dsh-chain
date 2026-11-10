@@ -1,0 +1,353 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>思维链星云</title>
+<style>
+  :root{
+    --bg:#0d1218; --panel:rgba(18,25,33,.86); --line:#233240;
+    --text:#e6eef4; --muted:#8fa3b0; --accent:#4ec9a0;
+  }
+  html.dark{ --bg:#0a0f14; --panel:rgba(16,22,29,.9); }
+  html:not(.dark){ --bg:#f3f6f8; --panel:rgba(255,255,255,.9); --line:#dbe3e9; --text:#1c2b36; --muted:#5f7280; }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:14px; background:transparent; color:var(--text);
+    font:13px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  .wrap{position:relative; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--bg);}
+  canvas{display:block; width:100%; height:520px; cursor:grab; touch-action:none;}
+  canvas.drag{cursor:grabbing}
+  .hud{
+    position:absolute; left:12px; top:10px; display:flex; gap:6px; flex-wrap:wrap;
+    font-size:11px; color:var(--muted); pointer-events:none;
+  }
+  .hud b{color:var(--text); font-weight:500}
+  .ctl{position:absolute; right:10px; top:10px; display:flex; gap:6px}
+  .ctl button{
+    background:var(--panel); color:var(--text); border:1px solid var(--line);
+    border-radius:7px; padding:4px 9px; font-size:11px; cursor:pointer; line-height:1.4;
+  }
+  .ctl button:hover{border-color:var(--accent)}
+  .ctl button[aria-pressed="true"]{border-color:var(--accent); color:var(--accent)}
+  .legend{
+    display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:10px; font-size:11px; color:var(--muted);
+  }
+  .legend span{display:inline-flex; align-items:center; gap:5px}
+  .dot{width:8px; height:8px; border-radius:50%; flex:none}
+  .card{
+    position:absolute; right:12px; bottom:12px; width:min(330px,calc(100% - 24px));
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:10px 12px; backdrop-filter:blur(6px); display:none;
+  }
+  .card.on{display:block}
+  .card h4{margin:0 0 6px; font-size:13px; font-weight:500; line-height:1.45}
+  .card .meta{font-size:11px; color:var(--muted); margin-bottom:6px}
+  .card p{margin:4px 0 0; font-size:12px; color:var(--text); opacity:.88}
+  .empty{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:8px; color:var(--muted); font-size:13px; text-align:center; padding:24px;
+  }
+  .empty b{color:var(--text); font-weight:500; font-size:14px}
+</style>
+
+<div class="wrap">
+  <canvas id="sky"></canvas>
+  <div class="hud" id="hud"></div>
+  <div class="ctl">
+    <button id="spin" aria-pressed="true" title="整团自转">自转</button>
+    <button id="orbit" aria-pressed="true" title="记忆球绕池心走轨道">轨道</button>
+    <button id="reset" title="回到初始视角">复位</button>
+  </div>
+  <div class="card" id="card">
+    <h4 id="cardTitle"></h4>
+    <div class="meta" id="cardMeta"></div>
+    <p id="cardBody"></p>
+  </div>
+  <div class="empty" id="empty" style="display:none">
+    <b>星云还是空的</b>
+    <span>让麦麦做几个决定，或在「记忆列表」里写一条，球就会长出来。</span>
+  </div>
+</div>
+<div class="legend" id="legend"></div>
+
+<script>
+(() => {
+  const cv = document.getElementById('sky');
+  const ctx = cv.getContext('2d');
+  const hud = document.getElementById('hud');
+  const legend = document.getElementById('legend');
+  const card = document.getElementById('card');
+  const emptyBox = document.getElementById('empty');
+  const btnSpin = document.getElementById('spin');
+  const btnOrbit = document.getElementById('orbit');
+
+  let data = { nodes: [], edges: [], pools: [], stats: {} };
+  let dots = [];          // 渲染用节点
+  let poolCenters = {};   // 池心（3D）
+  let spinOn = true, orbitOn = true;
+  let yaw = -0.5, pitch = 0.32, zoom = 1, t = 0;
+  let dragging = false, lastX = 0, lastY = 0, moved = 0;
+  let hovered = null, selected = null;
+  let dpr = Math.min(2, window.devicePixelRatio || 1);
+
+  // ---- 八池在 3D 空间里的位置：正八面体 + 上下两环，避免全挤在一个平面上
+  const SLOTS = [
+    [  0,  1.00,  0   ],   // core       顶
+    [ .82,  .45,  .32 ],   // fact
+    [ .28,  .58, -.86 ],   // skillRule
+    [-.74,  .40,  -.52 ],   // skillExp
+    [-.62,  .10,  .78 ],   // dailyCore
+    [ .70, -.16,  .66 ],   // dailyPartial
+    [ .10, -.62, -.80 ],   // emotion
+    [  0, -1.00,  0   ],   // hippocampus 底
+  ];
+
+  function layout() {
+    const rect = cv.getBoundingClientRect();
+    cv.width = Math.max(1, Math.round(rect.width * dpr));
+    cv.height = Math.max(1, Math.round(rect.height * dpr));
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  // ---- 取数据
+  async function load() {
+    try {
+      await window.maibot.ready;
+      data = (await window.maibot.query('g', { limit: 220 })) || {};
+    } catch (e) {
+      data = { nodes: [], edges: [], pools: [], error: String(e) };
+    }
+    build();
+  }
+
+  function build() {
+    const pools = data.pools || [];
+    poolCenters = {};
+    pools.forEach((p, i) => {
+      const s = SLOTS[i % SLOTS.length];
+      const radius = p.key === 'core' ? 0.42 : p.key === 'hippocampus' ? 0.5 : 0.72;
+      poolCenters[p.key] = { x: s[0] * 1.55, y: s[1] * 1.42, z: s[2] * 1.55, r: radius, meta: p };
+    });
+
+    // 每个池里的球均匀分布在一个小圆盘上，各自有固定相位 —— 不互相追
+    const perPool = {};
+    dots = (data.nodes || []).map((n, i) => {
+      const center = poolCenters[n.p] || { x: 0, y: 0, z: 0, r: .7 };
+      const idx = perPool[n.p] = (perPool[n.p] || 0) + 1;
+      const golden = 2.399963229728653;
+      const rr = center.r * Math.sqrt(idx / Math.max(1, (data.pools.find(p => p.key === n.p) || {}).count || 1));
+      const ang = idx * golden;
+      return {
+        n,
+        base: {
+          x: center.x + Math.cos(ang) * rr,
+          y: center.y + Math.sin(ang * 1.7) * rr * 0.35,
+          z: center.z + Math.sin(ang) * rr,
+        },
+        phase: (i * 0.7) % (Math.PI * 2),
+        amp: 0.045 + (i % 5) * 0.012,
+        sx: 0, sy: 0, depth: 0,
+        color: (center.meta && center.meta.color) || '#8fa3b0',
+      };
+    });
+
+    // HUD 与图例
+    const st = data.stats || {};
+    hud.innerHTML = `<span>共 <b>${st.shown || 0}</b> 颗记忆球</span>`
+      + (st.truncated ? `<span>· 还有 ${st.total - st.shown} 条太密集未画</span>` : '')
+      + (st.events ? `<span>· <b>${st.events}</b> 条属同一次决策</span>` : '');
+    legend.innerHTML = (data.pools || [])
+      .filter(p => p.count > 0)
+      .map(p => `<span><i class="dot" style="background:${p.color}"></i>${p.label} ${p.count}</span>`)
+      .join('');
+
+    emptyBox.style.display = (data.nodes || []).length ? 'none' : 'flex';
+  }
+
+  // ---- 3D 投影
+  function project(p) {
+    const cy = Math.cos(yaw), sy = Math.sin(yaw);
+    let x = p.x * cy - p.z * sy;
+    let z = p.x * sy + p.z * cy;
+    const cp = Math.cos(pitch), sp = Math.sin(pitch);
+    let y = p.y * cp - z * sp;
+    z = p.y * sp + z * cp;
+    const dist = 4.2;
+    const f = (dist / (dist + z)) * Math.min(cv.clientWidth, cv.clientHeight) * 0.30 * zoom;
+    return { x: cv.clientWidth / 2 + x * f, y: cv.clientHeight / 2 + y * f, s: f, z };
+  }
+
+  // ---- 主循环（30fps 上限，与上游一致）
+  let last = 0;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (now - last < 33) return;
+    const dt = Math.min(0.05, (now - last) / 1000) || 0.016;
+    last = now;
+    t += dt;
+    if (spinOn) yaw += dt * 0.10;
+    draw();
+  }
+
+  function draw() {
+    const W = cv.clientWidth, H = cv.clientHeight;
+    ctx.clearRect(0, 0, W, H);
+
+    // 池心与本池连线（"依据"的视觉支撑）
+    const centers = {};
+    for (const key in poolCenters) {
+      const c = poolCenters[key];
+      const wobble = orbitOn ? Math.sin(t * 0.3 + (key.length % 7)) * 0.02 : 0;
+      centers[key] = project({ x: c.x, y: c.y + wobble, z: c.z });
+    }
+
+    // 池与池之间的骨架线
+    ctx.lineWidth = 1;
+    for (let i = 0; i < SLOTS.length; i++) {
+      const a = centers[Object.keys(poolCenters)[i]];
+      const b = centers[Object.keys(poolCenters)[(i + 1) % SLOTS.length]];
+      if (!a || !b) continue;
+      ctx.strokeStyle = 'rgba(110,140,165,0.10)';
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+
+    // 计算每球位置
+    for (const d of dots) {
+      const wob = orbitOn ? d.amp * Math.sin(t * 0.8 + d.phase) : 0;
+      const p = project({ x: d.base.x + wob, y: d.base.y + wob * 0.6, z: d.base.z + wob });
+      d.sx = p.x; d.sy = p.y; d.depth = p.z; d.scale = p.s;
+    }
+    dots.sort((a, b) => b.depth - a.depth);
+
+    // 球到池心的细线
+    for (const d of dots) {
+      const c = centers[d.n.p];
+      if (!c) continue;
+      const alpha = 0.06 + Math.min(0.16, Math.max(0, 1 - d.depth / 4) * 0.16);
+      ctx.strokeStyle = `rgba(120,170,200,${alpha})`;
+      ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(d.sx, d.sy); ctx.stroke();
+    }
+
+    // 同事件连线
+    const byId = {};
+    for (const d of dots) byId[d.n.id] = d;
+    for (const e of (data.edges || [])) {
+      const a = byId[e.s], b = byId[e.d];
+      if (!a || !b) continue;
+      ctx.strokeStyle = 'rgba(240,153,123,0.34)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy); ctx.stroke();
+    }
+    ctx.lineWidth = 1;
+
+    // 记忆球
+    for (const d of dots) {
+      const fresh = Math.max(0, 1 - d.n.a / 120);          // 越新越亮
+      const w = Math.min(1, d.n.w);
+      const r = Math.max(2.2, (2.2 + w * 4.4) * (0.55 + d.scale / 26));
+      const near = Math.min(1, Math.max(0.18, 1 - d.depth / 3.4));
+      const isSel = selected === d.n.id, isHov = hovered === d.n.id;
+
+      if (isSel || isHov) {
+        ctx.beginPath(); ctx.arc(d.sx, d.sy, r + 3.5, 0, 7);
+        ctx.strokeStyle = isSel ? '#4ec9a0' : 'rgba(255,255,255,.5)';
+        ctx.lineWidth = 1.6; ctx.stroke(); ctx.lineWidth = 1;
+      }
+      const grd = ctx.createRadialGradient(d.sx - r * .3, d.sy - r * .3, r * .15, d.sx, d.sy, r);
+      grd.addColorStop(0, d.color);
+      grd.addColorStop(1, 'rgba(0,0,0,.0)');
+      ctx.globalAlpha = near * (0.45 + fresh * 0.55);
+      ctx.fillStyle = grd;
+      ctx.beginPath(); ctx.arc(d.sx, d.sy, r, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // 池名
+    ctx.font = '11px ui-sans-serif,system-ui,sans-serif';
+    ctx.textAlign = 'center';
+    for (const key in centers) {
+      const c = centers[key], meta = poolCenters[key].meta;
+      if (!meta || !meta.count) continue;
+      ctx.fillStyle = meta.color;
+      ctx.globalAlpha = Math.min(0.9, Math.max(0.3, 1 - c.z / 3));
+      ctx.fillText(meta.label, c.x, c.y - 6);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ---- 交互：拖拽旋转 / 滚轮缩放 / 点击看详情
+  cv.addEventListener('pointerdown', e => {
+    dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+    cv.classList.add('drag'); cv.setPointerCapture(e.pointerId);
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!dragging) {
+      // 悬停命中检测（半径放宽一点，球小的时候好点中）
+      const rect = cv.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      let found = null, best = 1e9;
+      for (const d of dots) {
+        const dist = (d.sx - mx) ** 2 + (d.sy - my) ** 2;
+        if (dist < 260 && dist < best) { best = dist; found = d.n.id; }
+      }
+      hovered = found;
+      cv.style.cursor = found ? 'pointer' : 'grab';
+      return;
+    }
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    moved += Math.abs(dx) + Math.abs(dy);
+    yaw += dx * 0.006;
+    pitch = Math.max(-1.2, Math.min(1.2, pitch + dy * 0.005));
+  });
+  cv.addEventListener('pointerup', e => {
+    dragging = false; cv.classList.remove('drag');
+    if (moved < 5) {
+      const rect = cv.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      let found = null, best = 1e9;
+      for (const d of dots) {
+        const dist = (d.sx - mx) ** 2 + (d.sy - my) ** 2;
+        if (dist < 260 && dist < best) { best = dist; found = d; }
+      }
+      showCard(found ? found.n : null);
+    }
+  });
+  cv.addEventListener('wheel', e => {
+    e.preventDefault();
+    zoom = Math.max(0.55, Math.min(2.2, zoom * (e.deltaY > 0 ? 0.93 : 1.07)));
+  }, { passive: false });
+
+  function showCard(n) {
+    if (!n) { selected = null; card.classList.remove('on'); return; }
+    selected = n.id;
+    const meta = (data.pools || []).find(p => p.key === n.p) || {};
+    document.getElementById('cardTitle').textContent = n.t;
+    document.getElementById('cardMeta').innerHTML =
+      `<i class="dot" style="background:${meta.color || '#8fa3b0'};display:inline-block;margin-right:5px"></i>`
+      + `${meta.label || n.p} · 权重 ${n.w.toFixed(2)} · ${n.a < 1 ? '今天' : n.a.toFixed(0) + ' 天前'}`
+      + (n.k ? ` · 被想起 ${n.k} 次` : '')
+      + (n.e ? ` · ${n.e} 条依据` : '');
+    document.getElementById('cardBody').textContent =
+      meta.desc ? `这一层放：${meta.desc}` : '';
+    card.classList.add('on');
+  }
+
+  btnSpin.addEventListener('click', () => {
+    spinOn = !spinOn; btnSpin.setAttribute('aria-pressed', String(spinOn));
+  });
+  btnOrbit.addEventListener('click', () => {
+    orbitOn = !orbitOn; btnOrbit.setAttribute('aria-pressed', String(orbitOn));
+  });
+  document.getElementById('reset').addEventListener('click', () => {
+    yaw = -0.5; pitch = 0.32; zoom = 1; showCard(null);
+  });
+
+  // 主题同步：宿主会派发 maibot:context
+  window.addEventListener('maibot:context', () => layout());
+
+  layout();
+  new ResizeObserver(layout).observe(cv);
+  load();
+  requestAnimationFrame(frame);
+})();
+</script>

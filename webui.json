@@ -2,9 +2,31 @@
   "schema_version": 2,
   "required_capabilities": [
     "declarative_basic",
-    "structured_arguments"
+    "structured_arguments",
+    "custom_pages"
   ],
   "pages": [
+    {
+      "id": "nebula",
+      "mode": "custom",
+      "title": "思维链星云",
+      "description": "八池各成一簇的三维视图：记忆球绕池心走固定轨道，越新越亮，点一颗看它是什么。",
+      "icon": "puzzle",
+      "layout": "viewport",
+      "entry": "webui/nebula.html",
+      "queries": {
+        "g": {
+          "api": "webui_graph",
+          "version": "1",
+          "parameters": {
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        }
+      }
+    },
     {
       "id": "overview",
       "title": "思维链概览",
