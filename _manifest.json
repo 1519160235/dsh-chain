@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "version": "0.7.0",
+  "version": "0.7.1",
   "name": "思维链记忆",
   "description": "记住「为什么这么决定」而不只是结论。八池分级遗忘、每轮注入系统提示、字符预算装箱、夜巡自动整理。",
   "author": {

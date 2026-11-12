@@ -1459,6 +1459,9 @@ class MaiChainPlugin(MaiBotPlugin):
         current = max(1, min(pages, int(page or 1)))
         window = entries[(current - 1) * size : current * size]
 
+        # 详情不再单开一个查询：宿主的 queries **不接受 arguments**，
+        # 拿不到"被点中的那一行"。所以把完整内容随行一起给出去，
+        # 对话框用 scope=selection 直接读选中行（这也少一次往返）。
         rows = [
             {
                 "title": str(item.get("judgement") or item.get("conclusion") or "(无标题)"),
@@ -1467,6 +1470,9 @@ class MaiChainPlugin(MaiBotPlugin):
                 "weight": round(float(item.get("weight") or 0), 2),
                 "touches": int(item.get("touch_count") or 0),
                 "state": "已退役" if item.get("superseded") else "生效中",
+                "conclusion": str(item.get("conclusion") or "").strip() or "（无）",
+                "evidence": "；".join(_as_text_list(item.get("evidence"))) or "（无）",
+                "hesitation": "；".join(_as_text_list(item.get("hesitation"))) or "（无）",
             }
             for item in window
         ]

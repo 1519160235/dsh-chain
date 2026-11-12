@@ -295,3 +295,33 @@
 `uv tool upgrade maibot` 会整目录替换 site-packages，补丁消失。
 **跑一次 `python tools/patch_host.py --apply` 再重启**即可恢复（幂等）。
 失效期间插件会记一条明确的 warning，面板状态变「未联通」，主功能不受影响。
+
+## [0.7.1] - 2026-11-12
+
+修面板写入报 `ApiError: 插件 API 执行失败`。
+
+### 根因：动作/查询没声明参数
+
+宿主前端组装参数时只看 `binding.parameters`：
+
+```ts
+Object.keys(binding.parameters).filter(...).map((name) => [name, values[name]])
+```
+
+我上一版只写了 `{"api": "webui_append", "version": "1"}`，一个参数都没声明，
+于是前端传了空对象，后端报 `webui_append() missing 1 required positional argument: 'judgement'`。
+
+### 修了三处
+
+- **写入**：声明 `judgement`（必填）/ `conclusion` / `tags`
+- **列表筛选**：声明 `pool` / `keyword` / `page` / `page_size`
+  （不声明的话筛选条件会被静默丢掉，比报错更难发现）
+- **详情**：宿主的 `queries` **不接受 `arguments`**
+  （`queries 只接受表单参数，不声明 arguments 或 confirmation`），
+  所以拿不到「被点中的那一行」。改为：
+  - `rows` 直接带上 `conclusion` / `evidence` / `hesitation`
+  - 对话框的文本节点用 `scope: "selection"` 绑定选中行字段
+
+### 顺带
+
+- 「判断」输入框不再预置空串：留空时前端会直接提示缺参数，比后端抛 ValueError 清楚

@@ -190,11 +190,26 @@
       "queries": {
         "rows": {
           "api": "webui_memories",
-          "version": "1"
-        },
-        "detail": {
-          "api": "webui_detail",
-          "version": "1"
+          "version": "1",
+          "parameters": {
+            "pool": {
+              "type": "string",
+              "max_length": 40
+            },
+            "keyword": {
+              "type": "string",
+              "max_length": 200
+            },
+            "page": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "page_size": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
         }
       },
       "content": [
@@ -348,7 +363,8 @@
                   "type": "text",
                   "label": "结论",
                   "value": {
-                    "source": "detail",
+                    "scope": "selection",
+                    "source": "picked",
                     "field": "conclusion"
                   }
                 },
@@ -356,7 +372,8 @@
                   "type": "text",
                   "label": "依据",
                   "value": {
-                    "source": "detail",
+                    "scope": "selection",
+                    "source": "picked",
                     "field": "evidence"
                   },
                   "format": "plain"
@@ -365,7 +382,8 @@
                   "type": "text",
                   "label": "当时的犹豫",
                   "value": {
-                    "source": "detail",
+                    "scope": "selection",
+                    "source": "picked",
                     "field": "hesitation"
                   },
                   "format": "plain"
@@ -385,8 +403,7 @@
             {
               "type": "input",
               "name": "judgement",
-              "label": "判断（必填）",
-              "value": ""
+              "label": "判断（必填）"
             },
             {
               "type": "input",
@@ -410,7 +427,22 @@
       "actions": {
         "write": {
           "api": "webui_append",
-          "version": "1"
+          "version": "1",
+          "parameters": {
+            "judgement": {
+              "type": "string",
+              "required": true,
+              "max_length": 2000
+            },
+            "conclusion": {
+              "type": "string",
+              "max_length": 2000
+            },
+            "tags": {
+              "type": "string",
+              "max_length": 300
+            }
+          }
         }
       }
     },
