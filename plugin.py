@@ -1239,6 +1239,31 @@ class MaiChainPlugin(MaiBotPlugin):
             "error": "",
         }
 
+    @API("webui_links", description="联想连线：谁和谁因为共享标签或词而被连在一起", version="1")
+    async def webui_links(self, max_edges: int = 200) -> Dict[str, Any]:
+        """给星云的连线层用。
+
+        移植自上游 ``lib/edges.js`` 的 ``planEdges``：先认「共享标签」，再认「共享稀有词」，
+        孤立的再补一条"字面最近邻"弱边，最后按度上限裁剪。
+
+        这条数据决定画面像不像：没有它，只有一堆孤立的点。
+
+        Args:
+            max_edges: 上限，默认 200（与上游一致）。
+
+        Returns:
+            ``{"links": [{"source","target","kind","weight","via"}], "total": n}``
+        """
+
+        try:
+            store = await self._ensure_ready()
+            entries = await asyncio.to_thread(store.load_all)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("联想连线读取失败: %s", exc)
+            return {"links": [], "total": 0, "error": str(exc)}
+
+        return {"links": plan_edges(entries, max_edges=max_edges), "total": len(entries), "error": ""}
+
     @API("webui_memories", description="分页读取记忆列表，可按池和关键词筛选", version="1")
     async def webui_memories(
         self,
@@ -1394,6 +1419,172 @@ class MaiChainPlugin(MaiBotPlugin):
             raise ValueError("判断不能为空")
         tag_list = [item.strip() for item in str(tags or "").replace("，", ",").split(",") if item.strip()]
         return await self.handle_append(judgement=text, conclusion=conclusion, tags=tag_list)
+
+
+def plan_edges(entries: Sequence[Mapping[str, Any]], *, max_edges: int = 200) -> List[Dict[str, Any]]:
+    """移植上游 ``lib/edges.js`` 的 ``planEdges``。
+
+    三类边，按可信度排序：
+
+    1. **标签桥** —— 两条记忆共享同一个手写标签。星形连（一个中心最多连 3 个），
+       不做两两全连；上游实测全连会把平均度推到 8，联想一扩散就是半库噪声。
+    2. **词桥** —— 共享一个"稀有词"（df 只有 2~3 条记忆用过、长度 ≥3）。
+    3. **最近邻** —— 前两类都没连上的孤立条目，找字面最像的一条接上，权重最低。
+
+    最后按度上限 5 裁剪：度太高的节点等于"什么都连得上"，那就不叫联想了。
+
+    Args:
+        entries: 记忆条目（已 materialize 的 dict）。
+        max_edges: 边数上限。
+
+    Returns:
+        边列表，每项 ``{"source", "target", "kind", "weight", "via"}``。
+    """
+
+    import math as _math
+
+    alive = [
+        item
+        for item in entries
+        if item.get("id") is not None
+        and not item.get("superseded")
+        and str(item.get("pool") or "") != "hippocampus"
+    ]
+    if len(alive) < 2:
+        return []
+
+    def words_of(entry: Mapping[str, Any]) -> set:
+        text = f"{entry.get('judgement') or ''} {entry.get('conclusion') or ''}"
+        try:
+            from mai_chain.retrieval import STOPWORDS, query_tokens  # noqa: PLC0415
+        except Exception:  # noqa: BLE001
+            return set()
+        return {w for w in query_tokens(text) if w not in STOPWORDS and len(w) >= 2}
+
+    by_id: Dict[str, set] = {}
+    df: Dict[str, int] = {}
+    for item in alive:
+        key = str(item["id"])
+        ws = words_of(item)
+        by_id[key] = ws
+        for word in ws:
+            df[word] = df.get(word, 0) + 1
+
+    # 标签桥（标签是手写的，比共享一个切词结果可信）
+    generic = {"片段", "未归类"}
+    by_tag: Dict[str, List[str]] = {}
+    for item in alive:
+        for raw in item.get("tags") or []:
+            tag = str(raw or "").strip()
+            if len(tag) < 2 or tag in generic:
+                continue
+            by_tag.setdefault(tag, []).append(str(item["id"]))
+
+    edges: List[Dict[str, Any]] = []
+    for tag, ids in by_tag.items():
+        if len(ids) < 2 or len(ids) > 12:      # 太长的标签等于什么都沾，不当桥
+            continue
+        hub = ids[0]
+        for leaf in ids[1:4]:
+            edges.append(
+                {
+                    "source": hub,
+                    "target": leaf,
+                    "kind": "related",
+                    "weight": 0.4,
+                    "via": f"标签「{tag}」",
+                }
+            )
+            if len(edges) >= max_edges:
+                break
+
+    # 词桥：只有被 2~3 条用过的词才算"桥"
+    bridge_of: Dict[str, set] = {}
+    for key, ws in by_id.items():
+        out = set()
+        for word in ws:
+            if not (2 <= df.get(word, 0) <= 3):
+                continue
+            if len(word) < 3:
+                continue
+            out.add(word)
+        bridge_of[key] = out
+
+    keys = list(bridge_of)
+    for i, a in enumerate(keys):
+        if len(edges) >= max_edges:
+            break
+        wa = bridge_of[a]
+        if not wa:
+            continue
+        for b in keys[i + 1 :]:
+            if len(edges) >= max_edges:
+                break
+            wb = bridge_of[b]
+            if not wb:
+                continue
+            shared = wa & wb
+            if not shared:
+                continue
+            via = max(shared, key=len)
+            weight = min(0.6, round(0.25 + 0.05 * len(via) + 0.05 * (len(shared) - 1), 2))
+            edges.append(
+                {"source": a, "target": b, "kind": "related", "weight": weight, "via": via}
+            )
+
+    # 最近邻：字面上最像的一条，弱边
+    touched = set()
+    for edge in edges:
+        touched.add(edge["source"])
+        touched.add(edge["target"])
+
+    def bigrams(key: str) -> set:
+        out = set()
+        for word in by_id.get(key) or set():
+            for k in range(max(0, len(word) - 1)):
+                out.add(word[k : k + 2])
+        return out
+
+    for key in by_id:
+        if key in touched:
+            continue
+        mine = bigrams(key)
+        if not mine:
+            continue
+        best_id, best_score = None, 0
+        for other in by_id:
+            if other == key:
+                continue
+            score = len(mine & bigrams(other))
+            if score > best_score:
+                best_id, best_score = other, score
+        if best_id is not None and best_score >= 3:
+            edges.append(
+                {
+                    "source": key,
+                    "target": best_id,
+                    "kind": "related",
+                    "weight": 0.22,
+                    "via": "字面最近邻",
+                }
+            )
+            touched.add(key)
+            touched.add(best_id)
+
+    # 度上限：保留权重高的边
+    max_degree = 5
+    deg: Dict[str, int] = {}
+    result: List[Dict[str, Any]] = []
+    for edge in sorted(edges, key=lambda item: -float(item["weight"])):
+        a, b = edge["source"], edge["target"]
+        if deg.get(a, 0) >= max_degree or deg.get(b, 0) >= max_degree:
+            continue
+        deg[a] = deg.get(a, 0) + 1
+        deg[b] = deg.get(b, 0) + 1
+        result.append(edge)
+        if len(result) >= max_edges:
+            break
+    return result
 
 
 def _age_days(entry: Dict[str, Any]) -> float:

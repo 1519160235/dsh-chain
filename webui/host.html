@@ -1,0 +1,321 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>思维链星云</title>
+<!--
+  这一页不实现任何视觉。它只做四件事：
+    1) 提供一个够用的迷你 React（原件只用到 useState / useRef / useEffect / createElement）
+    2) 提供 window.__ModuleLoader__，让上游 client.js 原样加载
+    3) 伪造 fetch('/chain-shared/api/*')，把插件的 webui_graph 数据喂给它
+    4) 挂载 ChainGraphView
+
+  真正的渲染代码是 lib/client.js —— 与上游同一份文件，一个字符都没改。
+  构建方式：python tools/build_nebula.py
+-->
+<style>
+  html,body{margin:0;height:100%;background:#04060a;overflow:hidden}
+  #root{position:absolute;inset:0}
+</style>
+<div id="root"></div>
+
+<script>
+/* ==========================================================================
+   迷你 React：只覆盖 client.js 用到的四个 API
+   ========================================================================== */
+(function (global) {
+  'use strict';
+
+  var instMap = new Map();      // 组件函数 -> hooks 实例
+  var stack = [];               // 渲染栈（支持嵌套组件）
+  var effectQueue = [];
+  var rootEl = null;
+  var dirty = false;
+
+  function flatten(list, out) {
+    for (var i = 0; i < list.length; i++) {
+      var v = list[i];
+      if (Array.isArray(v)) flatten(v, out);
+      else out.push(v);
+    }
+    return out;
+  }
+
+  function createElement(type, props) {
+    var kids = Array.prototype.slice.call(arguments, 2);
+    return { type: type, props: props || {}, children: flatten(kids, []) };
+  }
+
+  function current() { return stack[stack.length - 1]; }
+
+  function slot(init) {
+    var inst = current();
+    var i = inst.index++;
+    if (!(i in inst.hooks)) inst.hooks[i] = init;
+    return { inst: inst, i: i };
+  }
+
+  function useState(init) {
+    var s = slot(typeof init === 'function' ? init() : init);
+    var inst = s.inst, i = s.i;
+    var setter = function (next) {
+      var value = typeof next === 'function' ? next(inst.hooks[i]) : next;
+      if (value === inst.hooks[i]) return;
+      inst.hooks[i] = value;
+      schedule();
+    };
+    return [inst.hooks[i], setter];
+  }
+
+  function useRef(init) {
+    var s = slot(null);
+    if (s.inst.hooks[s.i] === null || s.inst.hooks[s.i] === undefined) {
+      s.inst.hooks[s.i] = { current: init };
+    }
+    return s.inst.hooks[s.i];
+  }
+
+  function useEffect(fn, deps) {
+    var s = slot(undefined);
+    effectQueue.push({ inst: s.inst, i: s.i, fn: fn, deps: deps });
+  }
+
+  function sameDeps(a, b) {
+    if (a === undefined || b === undefined) return false;   // 没 deps：每次都跑
+    if (!a || !b || a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  function flushEffects() {
+    var queue = effectQueue;
+    effectQueue = [];
+    for (var k = 0; k < queue.length; k++) {
+      var e = queue[k];
+      var prev = e.inst.effects[e.i];
+      if (prev && sameDeps(prev.deps, e.deps)) continue;
+      if (prev && typeof prev.cleanup === 'function') {
+        try { prev.cleanup(); } catch (err) { /* 清理失败不该拖垮整页 */ }
+      }
+      var cleanup = null;
+      try { cleanup = e.fn(); } catch (err) { console.error('[nebula] effect 出错', err); }
+      e.inst.effects[e.i] = { deps: e.deps, cleanup: cleanup };
+    }
+  }
+
+  function renderComponent(fn, props) {
+    var inst = instMap.get(fn);
+    if (!inst) {
+      inst = { hooks: [], effects: {}, index: 0 };
+      instMap.set(fn, inst);
+    }
+    inst.index = 0;
+    stack.push(inst);
+    var out;
+    try { out = fn(props); } finally { stack.pop(); }
+    return out;
+  }
+
+  var NS = 'http://www.w3.org/2000/svg';
+  var CAMEL_OK = { viewBox: 1, gradientUnits: 1, patternUnits: 1, preserveAspectRatio: 1 };
+
+  function attrName(k) {
+    if (CAMEL_OK[k]) return k;
+    return k.replace(/[A-Z]/g, function (m) { return '-' + m.toLowerCase(); });
+  }
+
+  function createDom(el, svg) {
+    if (el === null || el === undefined || el === false || el === true) {
+      return document.createTextNode('');
+    }
+    if (typeof el === 'string' || typeof el === 'number') {
+      return document.createTextNode(String(el));
+    }
+    if (Array.isArray(el)) {
+      var frag = document.createDocumentFragment();
+      for (var i = 0; i < el.length; i++) frag.appendChild(createDom(el[i], svg));
+      return frag;
+    }
+    if (typeof el.type === 'function') {
+      return createDom(renderComponent(el.type, el.props), svg);
+    }
+
+    var isSvg = svg || el.type === 'svg';
+    var node = isSvg ? document.createElementNS(NS, el.type) : document.createElement(el.type);
+    var props = el.props || {};
+
+    for (var k in props) {
+      var v = props[k];
+      if (k === 'key' || k === 'children') continue;
+      if (k === 'ref') {
+        if (typeof v === 'function') v(node);
+        else if (v && typeof v === 'object') v.current = node;
+        continue;
+      }
+      if (k === 'className') { node.setAttribute('class', v); continue; }
+      if (k === 'style') {
+        if (typeof v === 'string') node.setAttribute('style', v);
+        else for (var s in v) node.style[s] = v[s];
+        continue;
+      }
+      if (k.slice(0, 2) === 'on' && typeof v === 'function') {
+        node.addEventListener(k.slice(2).toLowerCase(), v);
+        continue;
+      }
+      if (k === 'htmlFor') { node.setAttribute('for', v); continue; }
+      if (v === null || v === undefined || v === false) continue;
+      node.setAttribute(attrName(k), String(v));
+    }
+
+    for (var c = 0; c < el.children.length; c++) {
+      node.appendChild(createDom(el.children[c], isSvg));
+    }
+    return node;
+  }
+
+  function render() {
+    dirty = false;
+    var mod = global.__CHAIN_MODULE__;
+    if (!mod || !rootEl) return;
+    var tree = createElement(mod.ChainGraphView, {});
+    var dom = createDom(tree, false);
+    while (rootEl.firstChild) rootEl.removeChild(rootEl.firstChild);
+    rootEl.appendChild(dom);
+    flushEffects();
+  }
+
+  function schedule() {
+    if (dirty) return;
+    dirty = true;
+    requestAnimationFrame(render);
+  }
+
+  global.NebulaReact = {
+    createElement: createElement,
+    useState: useState,
+    useRef: useRef,
+    useEffect: useEffect,
+    mount: function (container) {
+      rootEl = container;
+      render();
+    },
+    rerender: schedule,
+  };
+})(window);
+</script>
+
+<script>
+/* ==========================================================================
+   模块加载器 + 数据桥
+   ========================================================================== */
+(function (global) {
+  'use strict';
+
+  var loaded = null;
+  global.__ModuleLoader__ = {
+    load: function (mod) { loaded = mod; },
+  };
+
+  // 原件通过 require('react') 拿 React
+  function req(name) {
+    if (name === 'react') return global.NebulaReact;
+    throw new Error('未知模块: ' + name);
+  }
+
+  // ---- 把插件的 webui_graph 结果转成原件认识的形状
+  function toGraph(g, links) {
+    var nodes = [];
+    (g.nodes || []).forEach(function (n) {
+      nodes.push({
+        id: n.id,
+        pool: n.p,
+        weight: n.w,
+        label: n.t,
+        recalled: n.k || 0,
+        ts: n.ts || '',
+        evidence: [],
+        hesitation: [],
+        tags: [],
+        kind: 'memory',
+      });
+      // 依据点（原件里是独立节点，kind='evidence'，挂在 parent 上）
+      var cnt = Math.min(n.e || 0, 3);
+      for (var i = 0; i < cnt; i++) {
+        nodes.push({ id: n.id + ':ev' + i, kind: 'evidence', parent: n.id, pool: n.p });
+      }
+    });
+    // 连线是"像不像原版"的关键：上游 planEdges 产出的 related 边
+    var mappedLinks = (links && links.links ? links.links : []).map(function (L) {
+      return { source: L.source, target: L.target, kind: L.kind || 'related', weight: L.weight || 0.3 };
+    });
+    return {
+      nodes: nodes,
+      links: mappedLinks,
+      stats: { total: (g.stats && g.stats.total) || nodes.length },
+      targetSession: '',
+      file: '',
+      settings: {},
+      defaults: {},
+    };
+  }
+
+  var graphPromise = null;
+  function getGraph() {
+    if (!graphPromise) {
+      graphPromise = Promise.resolve()
+        .then(function () { return global.maibot ? global.maibot.ready : null; })
+        .then(function () {
+          return Promise.all([
+            global.maibot.query('g', { limit: 220 }),
+            global.maibot.query('links', { max_edges: 200 }).catch(function () { return { links: [] }; }),
+          ]);
+        })
+        .then(function (pair) { return toGraph(pair[0], pair[1]); })
+        .catch(function (e) {
+          console.error('[nebula] 取数失败', e);
+          return { nodes: [], links: [], stats: { total: 0 }, targetSession: '' };
+        });
+    }
+    return graphPromise;
+  }
+
+  // 原件用 fetch 拉数据；这里全部代理到插件 API
+  var realFetch = global.fetch ? global.fetch.bind(global) : null;
+  global.fetch = function (url) {
+    var u = String(url);
+    var respond = function (payload) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: function () { return Promise.resolve(payload); },
+        text: function () { return Promise.resolve(JSON.stringify(payload)); },
+      });
+    };
+    if (u.indexOf('/chain-shared/api/graph') === 0) return getGraph().then(respond);
+    if (u.indexOf('/chain-shared/api/pulse') === 0) return respond({ seq: 0, beats: [], labels: {} });
+    if (u.indexOf('/chain-shared/api/patrol') === 0) return respond(null);
+    if (u.indexOf('/chain-shared/api/layers') === 0) return respond({});
+    if (u.indexOf('/chain-shared/api/settings') === 0) return respond({ settings: {}, defaults: {} });
+    if (realFetch) return realFetch(url);
+    return respond({});
+  };
+
+  global.__CHAIN_REQUIRE__ = req;
+  global.__CHAIN_BOOT__ = function () {
+    // client.js 执行时会调 __ModuleLoader__.load(...)
+    var mod = loaded && loaded.factory ? loaded.factory(req) : null;
+    if (!mod) {
+      console.error('[nebula] 上游模块加载失败');
+      return;
+    }
+    global.__CHAIN_MODULE__ = mod;
+    global.NebulaReact.mount(document.getElementById('root'));
+  };
+})(window);
+</script>
+
+<script>
+/*__CLIENT_JS__*/
+</script>
+
+<script>
+window.__CHAIN_BOOT__();
+</script>

@@ -24,6 +24,16 @@
               "required": false
             }
           }
+        },
+        "links": {
+          "api": "webui_links",
+          "version": "1",
+          "parameters": {
+            "max_edges": {
+              "type": "integer",
+              "required": false
+            }
+          }
         }
       }
     },
