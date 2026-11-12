@@ -89,6 +89,14 @@
         },
         {
           "type": "text",
+          "label": "长期记忆联动",
+          "value": {
+            "source": "data",
+            "field": "link.text"
+          }
+        },
+        {
+          "type": "text",
           "value": {
             "source": "data",
             "field": "retrieval"

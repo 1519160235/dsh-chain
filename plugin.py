@@ -225,6 +225,42 @@ class PatrolSection(PluginConfigBase):
     )
 
 
+class CrossSection(PluginConfigBase):
+    """联动：把重要的几条同时写进框架自带的长期记忆（A_Memorix）。
+
+    两套记忆分工不同 —— 框架那套记「发生了什么、谁是谁」，我们记「为什么这么决定」。
+    这里只镜像少数几个池：全量同步会把长期记忆塞满一次性流水，反而降低检索质量。
+    """
+
+    __ui_label__ = "联动"
+    __ui_icon__ = "link"
+    __ui_order__ = 4
+
+    enabled: bool = Field(
+        default=True,
+        json_schema_extra=_ui(
+            "同步到长期记忆",
+            widget="switch",
+            hint="开启后，镜像池里的判断会额外写一份给 A_Memorix，普通检索也能捞到",
+        ),
+    )
+    pools: str = Field(
+        default="core,skillRule",
+        json_schema_extra=_ui(
+            "镜像哪些池",
+            hint="逗号分隔，默认 core,skillRule（原则与铁律）。想全量就写 core,fact,skillRule,skillExp,dailyCore",
+        ),
+    )
+    source_type: str = Field(
+        default="chain",
+        json_schema_extra=_ui("来源标记", hint="写进长期记忆时用它区分来源，默认 chain"),
+    )
+    timeout_ms: int = Field(
+        default=30000,
+        json_schema_extra=_ui("写入超时（毫秒）", hint="超时只记日志，不影响思维链本身的写入"),
+    )
+
+
 class MaiChainConfig(PluginConfigBase):
     """思维链记忆插件配置。"""
 
@@ -232,6 +268,7 @@ class MaiChainConfig(PluginConfigBase):
     injection: InjectionSection = Field(default_factory=InjectionSection, json_schema_extra=_ui("注入"))
     lifecycle: LifecycleSection = Field(default_factory=LifecycleSection, json_schema_extra=_ui("生命周期"))
     patrol: PatrolSection = Field(default_factory=PatrolSection, json_schema_extra=_ui("夜巡"))
+    cross: CrossSection = Field(default_factory=CrossSection, json_schema_extra=_ui("联动"))
     pools: Dict[str, PoolConfig] = Field(
         default_factory=dict,
         json_schema_extra=_ui("按池覆盖", hint="只填想改的项；留空则全部使用代码里的默认参数"),
@@ -249,16 +286,20 @@ class MaiChainPlugin(MaiBotPlugin):
         self._init_lock = asyncio.Lock()
         self._retrieval_ready = False
         self._patrol_task: Optional[asyncio.Task[None]] = None
+        # 与框架长期记忆（A_Memorix）的联动状态：unknown/pending/ok/missing/broken
+        self._link_state = "unknown"
+        self._link_detail = ""
 
     # ------------------------------------------------------------------ 生命周期
 
     async def on_load(self) -> None:
-        """加载：初始化存储与检索，拉起夜巡。"""
+        """加载：初始化存储与检索，拉起夜巡，检查与长期记忆的联动。"""
 
         await self._ensure_ready()
         config = self._cfg()
         if config.patrol.enabled:
             self._start_patrol_loop()
+        await self._probe_memory_link()
 
     async def on_unload(self) -> None:
         """卸载：停掉夜巡与存储连接。"""
@@ -288,6 +329,105 @@ class MaiChainPlugin(MaiBotPlugin):
                 task.cancel()
             if self._cfg().patrol.enabled:
                 self._start_patrol_loop()
+
+    # ------------------------------------------------------------------ 联动（长期记忆）
+
+    @staticmethod
+    def _host_patch_present() -> bool:
+        """宿主 registry.py 里有没有 memory.ingest（只读文件，不做任何写入）。"""
+
+        for base in sys.path:
+            if not base:
+                continue
+            target = Path(base) / "src" / "plugin_runtime" / "capabilities" / "registry.py"
+            try:
+                if not target.is_file():
+                    continue
+                if "memory.ingest" in target.read_text(encoding="utf-8", errors="ignore"):
+                    return True
+            except OSError:
+                continue
+        return False
+
+    async def _probe_memory_link(self) -> str:
+        """检查宿主有没有 ``memory.ingest``（只读文件，不发起任何调用）。
+
+        这里刻意**不做**"空载荷探测"：虽然它能在写入前被参数校验拦住，但宿主
+        会把它记成一条 ERROR（`能力 memory.ingest 执行异常`），每次重启都留噪音。
+        代价是「补丁已写进文件、但宿主还没重启」这种情况看不出来 —— 所以状态先记
+        ``pending``，等第一次真实写入再确认成 ok / broken。
+        """
+
+        if not self._cfg().cross.enabled:
+            self._link_state, self._link_detail = "off", "联动未开启"
+            return self._link_state
+
+        if self._host_patch_present():
+            self._link_state = "pending"
+            self._link_detail = "宿主已具备 memory.ingest，待首次写入确认"
+            logger.info("长期记忆联动：宿主已具备 memory.ingest，等待首次写入确认")
+            return self._link_state
+
+        self._link_state = "missing"
+        self._link_detail = "宿主缺少 memory.ingest 能力"
+        logger.warning(
+            "长期记忆联动不可用：宿主缺少 memory.ingest。"
+            "在插件目录运行 `python tools/patch_host.py --apply` 后重启宿主即可恢复"
+        )
+        return self._link_state
+
+    def _cross_pools(self) -> set:
+        """要镜像的池（容忍中文逗号与空格）。"""
+
+        raw = str(self._cfg().cross.pools or "")
+        cleaned = raw.replace("，", ",").replace(" ", "")
+        return {item for item in cleaned.split(",") if item}
+
+    async def _mirror_to_memory(self, entry: Mapping[str, Any], pool: str) -> Dict[str, Any]:
+        """把一条记忆镜像进框架的长期记忆。
+
+        失败只记日志、更新联动状态，**绝不抛给上层** —— 主写入已经成功，
+        联动是加分项，不能反过来把工具调用搞挂。
+        """
+
+        cross = self._cfg().cross
+        if not cross.enabled:
+            return {"synced": False, "reason": "联动未开启"}
+        if pool not in self._cross_pools():
+            return {"synced": False, "reason": f"{pool} 不在镜像范围"}
+
+        text = render_mirror_text(entry)
+        if not text:
+            return {"synced": False, "reason": "内容为空"}
+
+        payload = {
+            "external_id": f"mai-chain:{entry.get('id')}",
+            "source_type": str(cross.source_type or "chain"),
+            "text": text,
+            "tags": ["思维链"] + [str(tag) for tag in (entry.get("tags") or [])],
+            "metadata": {
+                "entry_id": str(entry.get("id") or ""),
+                "pool": pool,
+                "weight": float(entry.get("weight") or 0),
+                "origin": "mai-chain",
+            },
+        }
+        try:
+            await self.ctx.call_capability(
+                "memory.ingest",
+                timeout_ms=int(cross.timeout_ms or 30000),
+                **payload,
+            )
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc)
+            missing = ("未注册" in message) or ("METHOD_NOT_ALLOWED" in message)
+            self._link_state = "missing" if missing else "broken"
+            self._link_detail = message[:160]
+            logger.warning("镜像到长期记忆失败（主写入不受影响）: %s", message[:200])
+            return {"synced": False, "reason": message[:200]}
+
+        self._link_state, self._link_detail = "ok", "最近一次写入成功"
+        return {"synced": True, "reason": ""}
 
     # ------------------------------------------------------------------ 内部工具
 
@@ -635,12 +775,23 @@ class MaiChainPlugin(MaiBotPlugin):
             )
             enriched = dict(record)
             enriched["pool"] = pool_of({**record})
+            pool_label = POOLS.get(enriched["pool"], POOLS["hippocampus"]).label
+
+            # 联动：镜像池里的记忆额外写一份给框架的长期记忆。
+            # 失败只返回 note，不影响本次写入的成功语义。
+            mirror = await self._mirror_to_memory(enriched, enriched["pool"])
+
+            message = f"已记住（池: {pool_label}）"
+            if mirror.get("synced"):
+                message += "，并已同步到长期记忆"
             return {
                 "success": True,
                 "id": record["id"],
                 "pool": enriched["pool"],
-                "pool_label": POOLS.get(enriched["pool"], POOLS["hippocampus"]).label,
-                "message": f"已记住（池: {POOLS.get(enriched['pool'], POOLS['hippocampus']).label}）",
+                "pool_label": pool_label,
+                "message": message,
+                "memory_synced": bool(mirror.get("synced")),
+                "memory_note": "" if mirror.get("synced") else str(mirror.get("reason") or ""),
             }
         except Exception as exc:  # noqa: BLE001
             logger.exception("chain_append 失败")
@@ -1097,6 +1248,11 @@ class MaiChainPlugin(MaiBotPlugin):
             "retrieval": "已就绪（分词可用）" if retrieval_ready() else f"降级（只有字面匹配）{retrieval_error()}".strip(),
             "core_usage": f"{core_count_now} / {core_limit}",
             "core_percent": round(min(100, core_count_now * 100 / max(1, core_limit)), 1),
+            "link": {
+                "state": self._link_state,
+                "text": _LINK_TEXT.get(self._link_state, self._link_state),
+                "detail": self._link_detail,
+            },
         }
 
     @API("webui_graph", description="思维链星云图数据：节点（记忆）与连线（依据/同事件）", version="1")
@@ -1585,6 +1741,62 @@ def plan_edges(entries: Sequence[Mapping[str, Any]], *, max_edges: int = 200) ->
         if len(result) >= max_edges:
             break
     return result
+
+
+MIRROR_MAX_CHARS = 1200
+
+# 联动状态的中文说明（面板与工具返回共用，避免两处写不一样）
+_LINK_TEXT = {
+    "ok": "已联通（最近一次写入成功）",
+    "pending": "已就绪，待首次写入确认",
+    "missing": "未联通：宿主缺少 memory.ingest",
+    "broken": "已断开（详见服务器日志）",
+    "off": "联动已关闭",
+    "unknown": "未知",
+}
+
+
+def _as_text_list(value: Any) -> List[str]:
+    """把 evidence/hesitation 统一成字符串列表（库里可能存的是 JSON 字符串）。"""
+
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return [raw]
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        return [str(parsed).strip()] if str(parsed).strip() else []
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()]
+
+
+def render_mirror_text(entry: Mapping[str, Any]) -> str:
+    """把一条记忆渲染成给长期记忆用的纯文本。
+
+    长期记忆那边做的是**段落检索**，结构化 JSON 进去会被切散，所以这里给一段
+    带小标题的自然语言 —— 检索时更容易命中，也更好被人读。
+    """
+
+    judgement = str(entry.get("judgement") or "").strip()
+    if not judgement:
+        return ""
+
+    lines = [f"【判断】{judgement}"]
+    conclusion = str(entry.get("conclusion") or "").strip()
+    if conclusion:
+        lines.append(f"【结论】{conclusion}")
+    for label, key in (("依据", "evidence"), ("犹豫", "hesitation")):
+        items = _as_text_list(entry.get(key))
+        if items:
+            lines.append(f"【{label}】" + "；".join(items))
+    return "\n".join(lines)[:MIRROR_MAX_CHARS]
 
 
 def _age_days(entry: Dict[str, Any]) -> float:

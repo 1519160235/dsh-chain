@@ -244,3 +244,54 @@
   真浏览器不受影响。
 - `docs/nebula.png` 是 2026-10-30 之前的旧造型（力导向团块）；当前代码是"星球模式"，
   渲染出来是一颗密铺彩色点的球 —— 以上游代码为准，不以旧截图为基准。
+
+## [0.7.0] - 2026-11-12
+
+与框架自带长期记忆（A_Memorix）打通：写入时镜像一份，普通检索也能捞到。
+
+### 背景：框架没有对外写入口
+
+查证结论（不是猜的）：
+
+- 插件 SDK 只允许 `cap.call` 等三个原始方法；服务器 84 项能力里**没有一项写记忆**
+- A_Memorix 是核心插件，`plugin.py` 321 行、`@API` 数量 **0**，`api.call` 够不着
+- 两者不在同一进程；它的库有 69 张表 + FTS + 向量池 + 单一写入锁，直写会烂
+
+所以补了一条最小能力 `memory.ingest`，转发到宿主的 `MemoryService.ingest_text`。
+
+### 新增
+
+- **`tools/patch_host.py`**：幂等补丁工具，`--check` / `--apply` / `--revert`。
+  - 记录原始与打后 sha256、框架版本、备份路径，状态存 `E:/mai/host/patch_state.json`
+  - 锚点定位（`knowledge.search` 注册行），上游改了就拒绝盲打并提示看 diff
+  - 备份到 `E:/mai/host/patch_backup/registry.py.<版本>.<时间>`
+- **联动配置节**（中文界面）：开关、镜像哪些池（默认 `core,skillRule`）、
+  来源标记（默认 `chain`）、写入超时（默认 30s）
+- **`chain_append` 返回**新增 `memory_synced` / `memory_note`，主写入语义不受影响
+- **概览页状态**：「长期记忆联动」一行，状态含 已联通 / 待确认 / 未联通 / 已断开
+- manifest 声明 `memory.ingest` 能力
+
+### 排查中踩到的四个坑（都实测过）
+
+1. **`parents[2]` 少一层**：`__file__` 是 `site-packages/src/plugin_runtime/capabilities/registry.py`，
+   site-packages 是 `parents[3]`，写错就定位不到 `A_Memorix`
+2. **宿主的 logger 不格式化 `%s` 参数**：`logger.info("x=%s", v)` 打出来是裸 `x=%s`，
+   补丁里的日志必须用 f-string
+3. **空载荷探针会在宿主日志留 ERROR**：虽然参数校验保证不写入，但每次都记一条
+   `能力 memory.ingest 执行异常`。改为只读文件检查，首次真实写入再确认状态
+4. **宿主进程里 `from src.A_Memorix...` 可能失败**：改为**优先复用进程里已加载的
+   `src.services.memory_service`**，绕开导入；再退回导入 + 修 `src.__path__`
+
+### 验证
+
+- `patch_host.py --check`：已打、哈希一致、版本 1.4.2
+- 宿主日志：`注册能力实现: memory.ingest` ×N，调用日志显示
+  `memory.ingest: plugin=maibot.mai-chain ...`
+- 真实链路：能力调用进入 `MemoryService.ingest_text`（空载荷被参数校验拦住，未写入）
+- 插件侧：`长期记忆联动：宿主已具备 memory.ingest，等待首次写入确认`
+
+### 升级注意
+
+`uv tool upgrade maibot` 会整目录替换 site-packages，补丁消失。
+**跑一次 `python tools/patch_host.py --apply` 再重启**即可恢复（幂等）。
+失效期间插件会记一条明确的 warning，面板状态变「未联通」，主功能不受影响。

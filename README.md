@@ -63,6 +63,30 @@ A_Memorix 是 MaiBot 的核心模块（`src/A_memorix`），走 `host_service` �
 实测：50 条 → 405 字符，1000 条 → 410 字符。**注入量恒定。**
 
 
+
+## 与框架长期记忆联动
+
+MaiBot 自带一套长期记忆（A_Memorix），记「发生了什么、谁是谁」；本插件记「为什么这么决定」。
+开启联动后，**原则（core）和铁律（skillRule）** 这类判断会额外写一份过去，
+于是普通检索（`query_memory`、启发式自然拉起）也能捞到它们。
+
+配置在「联动」页：开关、镜像哪些池、来源标记、写入超时。默认只镜像
+`core,skillRule` —— 全量同步会把长期记忆塞满一次性流水。
+
+### 它需要一条宿主补丁
+
+框架没有对外开放「写记忆」的能力（84 项能力里没有，A_Memorix 也不暴露 `@API`），
+所以插件带了一个 30 行的补丁工具：
+
+```bash
+python tools/patch_host.py --check    # 看状态
+python tools/patch_host.py --apply    # 打补丁（幂等，先备份）
+python tools/patch_host.py --revert   # 回退
+```
+
+**升级 MaiBot 后需要重跑 `--apply` 并重启**。补丁失效时插件不会崩，
+只会记一条 warning、面板显示「未联通」。
+
 ## 可视化面板
 
 插件带三个侧栏页面（`webui.json` 声明式，协议 2）：
