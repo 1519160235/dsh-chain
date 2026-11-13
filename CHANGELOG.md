@@ -378,3 +378,59 @@ python tools/panel_call.py --bot <bot_id> --page memories --action write \
 刚写入完立刻再调 `queries/rows` 会偶发 502「插件运行时调用失败」，重试即恢复 ——
 写入触发的联动 RPC（`memory.ingest`，超时 30s）占着运行时，读请求排在后面。
 不是 bug，但如果面板在写入后马上刷新，用户可能看到一次红字。后续可考虑把镜像改成后台任务。
+
+## [0.7.3] - 2026-11-13
+
+修「插件返回的数据与组件声明不一致」——夜巡页整页打不开。
+
+### 真正的机制（不是数据校验，是渲染崩了）
+
+这句提示来自前端的 **ErrorBoundary**，不是后端的校验。前端解析引用时是抛异常的：
+
+```ts
+if (value === null || typeof value !== 'object' || !Object.hasOwn(value, field)) {
+  throw new Error(`Missing data field: ${reference.source}.${reference.field}`)
+}
+```
+
+一抛就被兜住，界面只剩那句「不一致」，**不告诉你缺哪个字段**。
+
+### 两个真实的缺字段
+
+| 接口 | 分支 | 缺什么 | 后果 |
+|---|---|---|---|
+| `webui_patrol` | 三个空态（无目录 / 无报告 / 读不出） | `date` | 夜巡页**只要没跑过就白屏** |
+| `webui_overview` | 读取失败分支 | `link` | 存储异常时概览页白屏 |
+
+正常分支都是全的，所以这个问题只在「空态」出现 —— 而空态恰恰是最常被打开的状态。
+
+两处都修成**所有分支返回同一组键**，空态给空值而不是省略。
+
+### 新增 `tools/check_webui.py`
+
+把「声明」和「返回」做机器比对，不再靠肉眼看 JSON：
+
+```bash
+python tools/check_webui.py        # 全量检查
+python tools/check_webui.py -v     # 逐条打印
+```
+
+- 会按前端的规则逐段解析 `field` 路径，缺一段就报出来
+- 默认用**真实数据目录**（空库时列表页没有行，选中行字段无从验证）
+- 没有行可验证时记为「跳过」并明说，不伪装成通过
+
+当前结果：**引用总数 22，问题 0，跳过 0**。
+
+### 面板实测
+
+```
+overview /data   -> 200 | available,core_percent,core_usage,edges,error,events,link,live,pool_chart,pools,recent,retrieval,total
+memories /rows   -> 200 | error,page,pages,rows,total
+patrol   /report -> 200 | date,exists,reason,report,sections
+```
+
+`patrol.date` 是这次补上的，`overview.link` 是异常分支补上的。
+
+> 写校验器时自己也踩了同一个坑：`"scope" in (value.get("scope"), "data", None)`
+> 是在判断字符串 `"scope"` 是否在元组里，恒为假，一开始只数到 4 个引用（实际 22 个）。
+ASCII 引号、元组成员判断，这类笔误不会报错，只会静默少做事。

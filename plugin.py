@@ -1190,6 +1190,8 @@ class MaiChainPlugin(MaiBotPlugin):
             raw_stats = await asyncio.to_thread(store.stats)
         except Exception as exc:  # noqa: BLE001
             logger.warning("WebUI 概览读取失败: %s", exc)
+            # 字段必须和正常分支**完全一致**：前端的 resolveReference 在路径缺段时
+            # 直接抛错，ErrorBoundary 会把它显示成「插件返回的数据与组件声明不一致」。
             return {
                 "available": False,
                 "error": str(exc),
@@ -1197,6 +1199,7 @@ class MaiChainPlugin(MaiBotPlugin):
                 "pools": [], "pool_chart": [], "recent": [],
                 "retrieval": "不可用", "core_usage": "0 / %d" % CORE_MAX,
                 "core_percent": 0,
+                "link": {"state": "unknown", "text": "联动状态未知", "detail": str(exc)},
             }
 
         # 各池分布（按注入顺序排，空池也列出来，方便看出哪个池是空的）
@@ -1517,25 +1520,33 @@ class MaiChainPlugin(MaiBotPlugin):
 
     @API("webui_patrol", description="读取最近一次夜巡报告", version="1")
     async def webui_patrol(self) -> Dict[str, Any]:
-        """给「夜巡」页用。没有报告时返回空状态而不是报错。"""
+        """给「夜巡」页用。没有报告时返回空状态而不是报错。
+
+        注意：所有分支都返回**同一组键**（``exists / date / reason / sections /
+        report``）。前端 ``resolveReference`` 缺字段会抛异常，页面显示成
+        「插件返回的数据与组件声明不一致」—— 之前空态少了 ``date``，整页就打不开。
+        """
+
+        def blank(reason: str, date: str = "") -> Dict[str, Any]:
+            return {"exists": False, "date": date, "reason": reason, "sections": [], "report": ""}
 
         try:
             data_dir = self.ctx.paths.data_dir / "patrol"
         except Exception as exc:  # noqa: BLE001
-            return {"exists": False, "reason": str(exc), "sections": [], "report": ""}
+            return blank(str(exc))
 
         if not data_dir.is_dir():
-            return {"exists": False, "reason": "还没跑过夜巡。点下面的按钮跑一次。", "sections": [], "report": ""}
+            return blank("还没跑过夜巡。点下面的按钮跑一次。")
 
         reports = sorted(data_dir.glob("*.md"), key=lambda p: p.name, reverse=True)
         if not reports:
-            return {"exists": False, "reason": "还没跑过夜巡。点下面的按钮跑一次。", "sections": [], "report": ""}
+            return blank("还没跑过夜巡。点下面的按钮跑一次。")
 
         latest = reports[0]
         try:
             text = latest.read_text(encoding="utf-8")
         except Exception as exc:  # noqa: BLE001
-            return {"exists": False, "reason": f"报告读不出来：{exc}", "sections": [], "report": ""}
+            return blank(f"报告读不出来：{exc}", latest.stem)
 
         # 报告本身是 Markdown；按「## 」切成小节，前端用折叠块逐节显示。
         sections: List[Dict[str, Any]] = []
