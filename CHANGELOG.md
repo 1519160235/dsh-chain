@@ -325,3 +325,56 @@ Object.keys(binding.parameters).filter(...).map((name) => [name, values[name]])
 ### 顺带
 
 - 「判断」输入框不再预置空串：留空时前端会直接提示缺参数，比后端抛 ValueError 清楚
+
+## [0.7.2] - 2026-11-13
+
+端到端闭环验证完成：**面板写入 → 思维链落库 → 镜像进 A_Memorix 长期记忆**，全链路实测通过。
+
+### 实测结果
+
+一次面板写入的返回：
+
+```json
+{"success": true, "result": {
+  "success": true, "id": "42ba66ec…", "pool": "skillRule", "pool_label": "铁律",
+  "message": "已记住（池: 铁律），并已同步到长期记忆",
+  "memory_synced": true, "memory_note": ""
+}}
+```
+
+两侧数据库同时核对：
+
+| 库 | 写入前 | 写入后 |
+|---|---|---|
+| `chain.db` entries | 0 | **1** |
+| `a-memorix` paragraphs | 2 | **3** |
+
+新增那条段落的字段：`source = "chain"`、
+`content = "【判断】…\n【结论】…"`、
+`metadata = {"external_id": "mai-chain:42ba66ec…", "origin": "mai-chain", "entry_id": …, "pool": "skillRule"}`。
+
+也就是说：**它不是"调通了"，是数据真的进了框架的长期记忆**，`query_memory` 和启发式召回
+从此都能捞到这些判断。
+
+### 新增 `tools/panel_call.py`
+
+调面板接口的调试工具。之前为了打通这条路耗了十几轮试探，全是踩在三个点上：
+
+1. 面板 API 不在 `:8001/api/webui/...`。宿主是多机器人架构，业务请求走
+   `/api/host/bots/<bot_id>/proxy/api/webui/...`。
+2. 鉴权是**会话 cookie**，不是 `host/webui.json` 里那个 Bearer token；
+   拿 `maibot host open-webui` 的 ticket 到 `POST /api/host/session` 换。
+3. `/api/host/` 下的非代理操作必须带 `X-Maibot-Host: 1`，否则 403「缺少管理请求标识」。
+
+```bash
+python tools/panel_call.py --bot <bot_id> --login-only
+python tools/panel_call.py --bot <bot_id> --page memories --query rows
+python tools/panel_call.py --bot <bot_id> --page memories --action write \
+    --args '{"judgement": "先给结论再解释", "tags": "铁律"}'
+```
+
+### 一处观察
+
+刚写入完立刻再调 `queries/rows` 会偶发 502「插件运行时调用失败」，重试即恢复 ——
+写入触发的联动 RPC（`memory.ingest`，超时 30s）占着运行时，读请求排在后面。
+不是 bug，但如果面板在写入后马上刷新，用户可能看到一次红字。后续可考虑把镜像改成后台任务。
